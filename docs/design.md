@@ -327,10 +327,11 @@ unique jobs work and rows come back, and none of it touches the consumer's Npgsq
 comma-joined string per row and are split with `string_to_array` in SQL, as River does, which avoids a two-dimensional
 array parameter. It runs on the caller's transaction when one is given.
 
-`InsertManyFastAsync` (binary COPY, count only, no uniqueness) comes later and is optional. If binary COPY can't write
-the enum unmapped, the fallback is a temp staging table with a `text` state followed by `INSERT … SELECT` with the cast.
-A temp table needs `TEMP` on the database, which the least-privilege role doesn't have, so that path would ship as an
-optional grant documented with the method. Without the grant, the method fails with a message that says so.
+`InsertManyFastAsync` is the COPY path: binary COPY straight into the job table, returning only a count. The state
+is written by its type name (`{s}.{p}job_state`), which Npgsql supports for unmapped enums, so it needs neither the
+consumer's type mappings nor a temp staging table, and runs under the least-privilege role. COPY can't skip
+duplicates, so unique jobs are rejected with a pointer to `InsertManyAsync`. Insert middleware runs with an empty
+result list.
 
 ## Middleware
 
@@ -377,6 +378,5 @@ safe. Any job that doesn't report back is left `running`, and the rescuer picks 
 
 ## Not yet built
 
-- `InsertManyFastAsync` (binary COPY, no uniqueness); see bulk insert above.
 - `Oxbow.Dashboard`.
 - Durable periodic-job schedules (River Pro).

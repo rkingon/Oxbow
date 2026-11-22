@@ -104,6 +104,7 @@ await oxbow.InsertAsync(new SendEmail("ada@example.com", "Hi"), new InsertOption
 });
 
 await oxbow.InsertManyAsync(users.Select(u => new InsertManyItem(new SendEmail(u.Email, "News"))));
+await oxbow.InsertManyFastAsync(items);              // binary COPY: fastest, returns a count, no unique jobs
 ```
 
 Per-kind defaults live on the args:

@@ -67,21 +67,113 @@ internal sealed partial class OxbowClient(
         IEnumerable<InsertManyItem> items,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(connection);
-        if (connection.FullState != System.Data.ConnectionState.Open)
-        {
-            throw new InvalidOperationException("The connection must be open.");
-        }
-
-        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
-        {
-            throw new InvalidOperationException("The transaction belongs to a different connection.");
-        }
-
+        ValidateCallerConnection(connection, transaction);
         var jobs = Prepare(items, checkKinds: true);
         return jobs.Count == 0
             ? Task.FromResult<IReadOnlyList<InsertResult>>([])
             : InsertPreparedAsync(connection, transaction, jobs, cancellationToken);
+    }
+
+    public async Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default)
+    {
+        var jobs = PrepareFast(items);
+        if (jobs.Count == 0)
+        {
+            return 0;
+        }
+
+        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using (connection.ConfigureAwait(false))
+        {
+            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (transaction.ConfigureAwait(false))
+            {
+                var count = await CopyPreparedAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return count;
+            }
+        }
+    }
+
+    public Task<int> InsertManyFastAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateCallerConnection(connection, transaction);
+        var jobs = PrepareFast(items);
+        return jobs.Count == 0 ? Task.FromResult(0) : CopyPreparedAsync(connection, transaction, jobs, cancellationToken);
+    }
+
+    private List<JobInsertParams> PrepareFast(IEnumerable<InsertManyItem> items)
+    {
+        var jobs = Prepare(items, checkKinds: true);
+        if (jobs.Any(j => j.UniqueKey is not null))
+        {
+            throw new ArgumentException(
+                "InsertManyFastAsync can't insert unique jobs, because COPY can't skip duplicates. Use InsertManyAsync for them.",
+                nameof(items));
+        }
+
+        return jobs;
+    }
+
+    private async Task<int> CopyPreparedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        List<JobInsertParams> jobs,
+        CancellationToken cancellationToken)
+    {
+        var count = 0;
+        JobInsertDelegate copy = async context =>
+        {
+            count = await CopyAsync(connection, transaction, context.Jobs, context.CancellationToken).ConfigureAwait(false);
+            return [];
+        };
+        await RunInsertPipelineAsync(jobs, copy, cancellationToken).ConfigureAwait(false);
+        return count;
+    }
+
+    private async Task<int> CopyAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IReadOnlyList<JobInsertParams> jobs,
+        CancellationToken cancellationToken)
+    {
+        foreach (var job in jobs)
+        {
+            ValidateQueueName(job.Queue, allowWildcard: false);
+        }
+
+        // COPY can't fall back to the column default per row, so unscheduled jobs take the app's clock.
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        int count;
+        var writer = await connection.BeginBinaryImportAsync(runtime.Sql.CopyJobs, cancellationToken).ConfigureAwait(false);
+        await using (writer.ConfigureAwait(false))
+        {
+            foreach (var job in jobs)
+            {
+                await writer.StartRowAsync(cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.EncodedArgs!, NpgsqlDbType.Jsonb, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.Kind, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync((short)job.MaxAttempts, NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.Metadata.ToJsonString(), NpgsqlDbType.Jsonb, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync((short)job.Priority, NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.Queue, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.ScheduledAt?.UtcDateTime ?? now, NpgsqlDbType.TimestampTz, cancellationToken).ConfigureAwait(false);
+
+                // Written by type name, so the consumer's data source needs no enum mapping.
+                await writer.WriteAsync(job.Scheduled ? "scheduled" : "available", runtime.Sql.StateTypeName, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.Tags.ToArray(), NpgsqlDbType.Array | NpgsqlDbType.Varchar, cancellationToken).ConfigureAwait(false);
+            }
+
+            count = (int)await writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await NotifyAsync(connection, transaction, jobs.Where(j => !j.Scheduled).Select(j => j.Queue), cancellationToken).ConfigureAwait(false);
+        OxbowDiagnostics.JobsInserted.Add(count);
+        return count;
     }
 
     /// <summary>Inserts on a connection of its own without the unknown-kind check; used by the periodic enqueuer.</summary>
@@ -270,10 +362,19 @@ internal sealed partial class OxbowClient(
         return job;
     }
 
-    private async Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
+    private Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         List<JobInsertParams> jobs,
+        CancellationToken cancellationToken) =>
+        RunInsertPipelineAsync(
+            jobs,
+            context => ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken),
+            cancellationToken);
+
+    private async Task<IReadOnlyList<InsertResult>> RunInsertPipelineAsync(
+        List<JobInsertParams> jobs,
+        JobInsertDelegate insert,
         CancellationToken cancellationToken)
     {
         using var activity = OxbowDiagnostics.ActivitySource.StartActivity("oxbow.insert", ActivityKind.Producer);
@@ -286,7 +387,7 @@ internal sealed partial class OxbowClient(
             }
         }
 
-        JobInsertDelegate pipeline = context => ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken);
+        var pipeline = insert;
         for (var i = _insertMiddleware.Length - 1; i >= 0; i--)
         {
             var middleware = _insertMiddleware[i];
@@ -348,24 +449,11 @@ internal sealed partial class OxbowClient(
             }
         }
 
-        var queuesToNotify = results
-            .Where(r => !r.UniqueSkippedAsDuplicate && r.Job.State == JobState.Available)
-            .Select(r => r.Job.Queue)
-            .Distinct(StringComparer.Ordinal)
-            .Where(ShouldNotify)
-            .ToArray();
-        if (queuesToNotify.Length > 0)
-        {
-            var notify = new NpgsqlCommand(runtime.Sql.Notify, connection, transaction);
-            await using (notify.ConfigureAwait(false))
-            {
-                notify.Parameters.AddWithValue("channel", runtime.Sql.InsertChannel);
-                notify.Parameters.Add(TextArray("payloads", queuesToNotify
-                    .Select(q => JsonSerializer.Serialize(new InsertPayload(q), OxbowJsonContext.Default.InsertPayload))
-                    .ToArray()));
-                await notify.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
+        await NotifyAsync(
+            connection,
+            transaction,
+            results.Where(r => !r.UniqueSkippedAsDuplicate && r.Job.State == JobState.Available).Select(r => r.Job.Queue),
+            cancellationToken).ConfigureAwait(false);
 
         var inserted = results.Count(r => !r.UniqueSkippedAsDuplicate);
         if (inserted > 0)
@@ -374,6 +462,43 @@ internal sealed partial class OxbowClient(
         }
 
         return results;
+    }
+
+    private async Task NotifyAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<string> availableQueues,
+        CancellationToken cancellationToken)
+    {
+        var queues = availableQueues.Distinct(StringComparer.Ordinal).Where(ShouldNotify).ToArray();
+        if (queues.Length == 0)
+        {
+            return;
+        }
+
+        var notify = new NpgsqlCommand(runtime.Sql.Notify, connection, transaction);
+        await using (notify.ConfigureAwait(false))
+        {
+            notify.Parameters.AddWithValue("channel", runtime.Sql.InsertChannel);
+            notify.Parameters.Add(TextArray("payloads", queues
+                .Select(q => JsonSerializer.Serialize(new InsertPayload(q), OxbowJsonContext.Default.InsertPayload))
+                .ToArray()));
+            await notify.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static void ValidateCallerConnection(NpgsqlConnection connection, NpgsqlTransaction? transaction)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (connection.FullState != System.Data.ConnectionState.Open)
+        {
+            throw new InvalidOperationException("The connection must be open.");
+        }
+
+        if (transaction is not null && !ReferenceEquals(transaction.Connection, connection))
+        {
+            throw new InvalidOperationException("The transaction belongs to a different connection.");
+        }
     }
 
     /// <summary>

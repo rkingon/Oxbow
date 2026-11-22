@@ -50,6 +50,9 @@ public class InsertBenchmarks
 
     [Benchmark(Description = "InsertManyAsync")]
     public Task<IReadOnlyList<InsertResult>> InsertMany() => _client.InsertManyAsync(_batch);
+
+    [Benchmark(Description = "InsertManyFastAsync (COPY)")]
+    public Task<int> InsertManyFast() => _client.InsertManyFastAsync(_batch);
 }
 
 /// <summary>Jobs worked per second: inserts a backlog, then times one node draining it with a no-op worker.</summary>

@@ -17,7 +17,7 @@ Reference: River `main` at `1f19003`. Each entry gives what differs and why.
 | Hooks | Separate hook interfaces (`InsertBegin`, `WorkBegin`, `WorkEnd`, …) alongside middleware | Insert and work middleware only | Middleware covers every hook point and is the ASP.NET Core shape .NET developers already know. |
 | Event subscription | `client.Subscribe(kinds…)` channel | Not included; covered by `Meter`/`ActivitySource` and middleware | Conventional .NET observability instead of a bespoke event stream. |
 | Durable periodic jobs, workflows, sequences, resumable jobs, plugins | River Pro, or recent OSS additions | Not included | Out of scope for parity v1. `pending` stays in the enum for future use. |
-| Bulk insert | `InsertMany` (unnest, returning rows) and `InsertManyFast` (COPY, count only) | Same split: `InsertManyAsync` uses unnest; an optional `InsertManyFastAsync` via COPY comes later | — (parity; listed because the fast path may need an optional `TEMP` grant, see design) |
+| Bulk insert | `InsertMany` (unnest, returning rows) and `InsertManyFast` (COPY, count only) | Same split: `InsertManyAsync` (unnest, rows returned, unique jobs supported) and `InsertManyFastAsync` (binary COPY, count only, unique jobs rejected) | — (parity) |
 | EF insert | — | Throws without `Database.CurrentTransaction` | Otherwise the job commits ahead of `SaveChanges`. |
 | Tracing | None built in | `oxbow.insert`/`oxbow.work` spans; `traceparent` stored in metadata and linked | OpenTelemetry is the .NET convention. A link, not a parent, because work can run hours later. |
 | Rescue metadata key | `river:rescue_count` | `oxbow:rescue_count` | Namespace. |

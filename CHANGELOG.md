@@ -13,7 +13,13 @@ All notable changes to this project are documented here. The format follows
 - `Oxbow.Testing`: `OxbowAssert` (inserted / not inserted, inside the test's transaction) and `WorkerHarness`, which runs
   a worker inline with its middleware and timeout, without a database.
 - `Oxbow.Cli`: the `oxbow` dotnet tool, with `sql`, `grants` and `migrate`.
+- `IOxbowClient.InsertManyFastAsync`: bulk insert with binary COPY, returning a count (no unique jobs).
 - `Job<TArgs>` and `JobContext` have public constructors, for unit testing workers and middleware.
+
+### Changed
+
+- Attempt outcomes are written in batches (River's batch completer) instead of one round trip per job.
+- Inserts send at most one wake-up NOTIFY per queue per fetch cooldown.
 
 ## [0.1.0-alpha.1] - 2026-11-22
 

@@ -15,9 +15,10 @@ Apple M5 (10 cores), macOS 26.5, .NET 10.0.15, Postgres 17 in Docker Desktop, Ox
 
 | Benchmark | Mean |
 |---|---:|
-| `InsertAsync`, own transaction | 614 µs |
-| `InsertAsync`, caller's transaction (open, begin, insert, commit) | 578 µs |
-| `InsertManyAsync`, 1,000 jobs | 8.1 ms (≈ 123,000 jobs/s) |
+| `InsertAsync`, own transaction | 457 µs |
+| `InsertAsync`, caller's transaction (open, begin, insert, commit) | 441 µs |
+| `InsertManyAsync`, 1,000 jobs | 7.6 ms (≈ 131,000 jobs/s; 1.3 MB allocated) |
+| `InsertManyFastAsync` (binary COPY), 1,000 jobs | 5.3 ms (≈ 190,000 jobs/s; 0.37 MB allocated) |
 | One node drains 10,000 jobs, `MaxWorkers = 100` | 9.95 s (≈ 1,000 jobs/s) |
 | One node drains 10,000 jobs, `MaxWorkers = 1000` | 0.92 s (≈ 10,900 jobs/s) |
 
@@ -31,3 +32,5 @@ The drain time includes starting the host.
   doesn't matter.
 - Completions are batched (up to 5,000 per write, every 50 ms), so finishing a job costs no round trip of its own.
 - `InsertManyAsync` is one `INSERT … SELECT FROM unnest(…)` statement, with unique-job support and rows returned.
+  `InsertManyFastAsync` uses binary COPY: about 30% faster and a quarter of the allocations, but it returns only a
+  count and rejects unique jobs.

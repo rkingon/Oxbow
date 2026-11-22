@@ -49,6 +49,9 @@ internal sealed class OxbowSql
             RETURNING {Columns(prefix + "job")}, (xmax <> 0) AS unique_skipped_as_duplicate
             """;
 
+        CopyJobs = $"COPY {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags) FROM STDIN (FORMAT BINARY)";
+        StateTypeName = state;
+
         Notify = "SELECT pg_notify(@channel, payload) FROM unnest(@payloads::text[]) AS payload";
 
         GetAvailable = $"""
@@ -404,6 +407,10 @@ internal sealed class OxbowSql
     public string SchemaVersion { get; }
 
     public string InsertMany { get; }
+
+    public string CopyJobs { get; }
+
+    public string StateTypeName { get; }
 
     public string Notify { get; }
 

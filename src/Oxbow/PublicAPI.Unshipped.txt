@@ -1,3 +1,5 @@
 #nullable enable
+Oxbow.IOxbowClient.InsertManyFastAsync(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+Oxbow.IOxbowClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
 Oxbow.Job<TArgs>.Job(Oxbow.JobRow! row, TArgs args) -> void
 Oxbow.JobContext.JobContext(Oxbow.JobRow! job, Oxbow.IJobArgs! args, System.IServiceProvider! services, System.Threading.CancellationToken cancellationToken) -> void

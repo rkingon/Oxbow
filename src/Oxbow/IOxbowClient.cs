@@ -52,6 +52,28 @@ public interface IOxbowClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts many jobs with binary COPY on a connection of its own: the fastest path, returning only a count. Unique
+    /// jobs aren't supported (COPY can't skip duplicates); use <see cref="InsertManyAsync(IEnumerable{InsertManyItem}, CancellationToken)"/>
+    /// for those. Insert middleware runs, with an empty result list.
+    /// </summary>
+    /// <param name="items">The jobs.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of jobs inserted.</returns>
+    Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default);
+
+    /// <summary>Inserts many jobs with binary COPY on the caller's connection and transaction.</summary>
+    /// <param name="connection">An open connection.</param>
+    /// <param name="transaction">The transaction to insert in, if any.</param>
+    /// <param name="items">The jobs.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of jobs inserted.</returns>
+    Task<int> InsertManyFastAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cancels a job. A job that hasn't started is cancelled at once and never runs. A running job's worker is
     /// signalled through its cancellation token, on whichever node runs it, and decides whether to stop.
     /// </summary>
