@@ -163,6 +163,15 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(m => m.AddMeter("Oxbow"));
 ```
 
+## Packages
+
+| Package | |
+|---|---|
+| `Oxbow` | The client, processor and schema |
+| `Oxbow.EntityFrameworkCore` | Insert in a `DbContext`'s transaction; schema helpers for EF migrations |
+| `Oxbow.Testing` | Insert assertions and an inline worker harness |
+| `Oxbow.Cli` | The `oxbow` dotnet tool: print or apply the schema |
+
 ## Design
 
 [docs/design.md](docs/design.md) covers the schema, the state machine, fetching, leader election and maintenance.

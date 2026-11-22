@@ -25,7 +25,12 @@ public interface IJobWorkMiddleware
 /// <summary>The job being worked, as seen by work middleware.</summary>
 public sealed class JobContext
 {
-    internal JobContext(JobRow job, IJobArgs args, IServiceProvider services, CancellationToken cancellationToken)
+    /// <summary>Creates a context, for example to unit test middleware.</summary>
+    /// <param name="job">The stored job.</param>
+    /// <param name="args">The deserialized args.</param>
+    /// <param name="services">The job's DI scope.</param>
+    /// <param name="cancellationToken">The job's cancellation token.</param>
+    public JobContext(JobRow job, IJobArgs args, IServiceProvider services, CancellationToken cancellationToken)
     {
         Job = job;
         Args = args;

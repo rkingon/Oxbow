@@ -7,6 +7,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Oxbow\Oxbow.csproj" />
+    <ProjectReference Include="..\..\src\Oxbow.Testing\Oxbow.Testing.csproj" />
+    <ProjectReference Include="..\..\src\Oxbow.Cli\Oxbow.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Oxbow.EntityFrameworkCore\Oxbow.EntityFrameworkCore.csproj" />
     <Using Include="Xunit" />
     <Using Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>

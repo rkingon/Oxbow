@@ -7,8 +7,13 @@ namespace Oxbow;
 public sealed class Job<TArgs>
     where TArgs : IJobArgs
 {
-    internal Job(JobRow row, TArgs args)
+    /// <summary>Creates a job, for example to unit test a worker.</summary>
+    /// <param name="row">The stored row.</param>
+    /// <param name="args">The deserialized args.</param>
+    public Job(JobRow row, TArgs args)
     {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(args);
         Row = row;
         Args = args;
     }

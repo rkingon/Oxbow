@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Oxbow.Cli/Oxbow.Cli.csproj" />
+    <Project Path="src/Oxbow.EntityFrameworkCore/Oxbow.EntityFrameworkCore.csproj" />
+    <Project Path="src/Oxbow.Testing/Oxbow.Testing.csproj" />
     <Project Path="src/Oxbow/Oxbow.csproj" />
   </Folder>
   <Folder Name="/tests/">

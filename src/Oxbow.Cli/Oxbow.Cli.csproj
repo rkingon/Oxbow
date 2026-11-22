@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>oxbow</ToolCommandName>
+    <PackageId>Oxbow.Cli</PackageId>
+    <Description>The oxbow command: print Oxbow's schema SQL and grants, or apply the schema to a database.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RootNamespace>Oxbow.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="Oxbow.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Oxbow\Oxbow.csproj" />
+  </ItemGroup>
+
+</Project>

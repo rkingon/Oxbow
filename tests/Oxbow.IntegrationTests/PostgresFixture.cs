@@ -46,6 +46,10 @@ public sealed class PostgresFixture : IAsyncLifetime
                 WITH CHECK (tenant = current_setting('app.tenant', true));
             GRANT SELECT, INSERT ON orders TO {AppRole};
             GRANT USAGE ON SEQUENCE orders_id_seq TO {AppRole};
+
+            CREATE TABLE widgets (id bigserial PRIMARY KEY, name text NOT NULL);
+            GRANT SELECT, INSERT ON widgets TO {AppRole};
+            GRANT USAGE ON SEQUENCE widgets_id_seq TO {AppRole};
             """);
     }
 
