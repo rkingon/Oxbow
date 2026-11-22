@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Oxbow/Oxbow.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Oxbow.IntegrationTests/Oxbow.IntegrationTests.csproj" />
+    <Project Path="tests/Oxbow.Tests/Oxbow.Tests.csproj" />
+  </Folder>
+</Solution>

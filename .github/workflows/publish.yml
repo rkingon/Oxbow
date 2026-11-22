@@ -1,0 +1,40 @@
+name: Publish
+
+# Publishing uses nuget.org Trusted Publishing: the policy is bound to this repo, this file name (publish.yml) and
+# the "nuget" environment, so renaming any of them breaks publishing. No API key is stored anywhere.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - run: dotnet build -c Release -p:Version=$VERSION
+      - run: dotnet test --project tests/Oxbow.Tests -c Release --no-build
+      - run: dotnet test --project tests/Oxbow.IntegrationTests -c Release --no-build
+      - run: dotnet pack src/Oxbow -c Release --no-build -p:Version=$VERSION -o artifacts
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

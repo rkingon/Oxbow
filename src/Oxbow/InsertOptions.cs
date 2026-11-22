@@ -1,0 +1,28 @@
+using System.Text.Json.Nodes;
+
+namespace Oxbow;
+
+/// <summary>Options for inserting a job. Unset values fall back to the args' defaults, then the client's.</summary>
+public sealed record InsertOptions
+{
+    /// <summary>The queue. Default <c>default</c>.</summary>
+    public string? Queue { get; init; }
+
+    /// <summary>Priority from 1 (highest) to 4. Default 1.</summary>
+    public int? Priority { get; init; }
+
+    /// <summary>Attempts before a failing job is discarded. Default <see cref="OxbowOptions.MaxAttempts"/>.</summary>
+    public int? MaxAttempts { get; init; }
+
+    /// <summary>Run no earlier than this. A future time inserts the job as <see cref="JobState.Scheduled"/>.</summary>
+    public DateTimeOffset? ScheduledAt { get; init; }
+
+    /// <summary>Tags: letters, digits, <c>_</c> and <c>-</c>, up to 255 characters each.</summary>
+    public IReadOnlyList<string>? Tags { get; init; }
+
+    /// <summary>Metadata stored with the job.</summary>
+    public JsonObject? Metadata { get; init; }
+
+    /// <summary>Uniqueness, enforced by a unique index in the database.</summary>
+    public UniqueOptions? Unique { get; init; }
+}

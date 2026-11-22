@@ -1,0 +1,334 @@
+#nullable enable
+abstract Oxbow.PeriodicSchedule.GetNextOccurrence(System.DateTimeOffset from) -> System.DateTimeOffset?
+const Oxbow.OxbowSchema.LatestVersion = 1 -> int
+Microsoft.Extensions.DependencyInjection.IOxbowBuilder
+Microsoft.Extensions.DependencyInjection.IOxbowBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions
+Microsoft.Extensions.DependencyInjection.OxbowServiceCollectionExtensions
+override Oxbow.AttemptError.Equals(object? obj) -> bool
+override Oxbow.AttemptError.GetHashCode() -> int
+override Oxbow.AttemptError.ToString() -> string!
+override Oxbow.InsertManyItem.Equals(object? obj) -> bool
+override Oxbow.InsertManyItem.GetHashCode() -> int
+override Oxbow.InsertManyItem.ToString() -> string!
+override Oxbow.InsertOptions.Equals(object? obj) -> bool
+override Oxbow.InsertOptions.GetHashCode() -> int
+override Oxbow.InsertOptions.ToString() -> string!
+override Oxbow.InsertResult.Equals(object? obj) -> bool
+override Oxbow.InsertResult.GetHashCode() -> int
+override Oxbow.InsertResult.ToString() -> string!
+override Oxbow.JobListQuery.Equals(object? obj) -> bool
+override Oxbow.JobListQuery.GetHashCode() -> int
+override Oxbow.JobListQuery.ToString() -> string!
+override Oxbow.JobListResult.Equals(object? obj) -> bool
+override Oxbow.JobListResult.GetHashCode() -> int
+override Oxbow.JobListResult.ToString() -> string!
+override Oxbow.OxbowMigration.Equals(object? obj) -> bool
+override Oxbow.OxbowMigration.GetHashCode() -> int
+override Oxbow.OxbowMigration.ToString() -> string!
+override Oxbow.PeriodicJob.Equals(object? obj) -> bool
+override Oxbow.PeriodicJob.GetHashCode() -> int
+override Oxbow.PeriodicJob.ToString() -> string!
+override Oxbow.UniqueOptions.Equals(object? obj) -> bool
+override Oxbow.UniqueOptions.GetHashCode() -> int
+override Oxbow.UniqueOptions.ToString() -> string!
+Oxbow.AttemptError
+Oxbow.AttemptError.<Clone>$() -> Oxbow.AttemptError!
+Oxbow.AttemptError.At.get -> System.DateTimeOffset
+Oxbow.AttemptError.At.init -> void
+Oxbow.AttemptError.Attempt.get -> int
+Oxbow.AttemptError.Attempt.init -> void
+Oxbow.AttemptError.AttemptError(System.DateTimeOffset At, int Attempt, string! Error, string? Trace) -> void
+Oxbow.AttemptError.Deconstruct(out System.DateTimeOffset At, out int Attempt, out string! Error, out string? Trace) -> void
+Oxbow.AttemptError.Equals(Oxbow.AttemptError? other) -> bool
+Oxbow.AttemptError.Error.get -> string!
+Oxbow.AttemptError.Error.init -> void
+Oxbow.AttemptError.Trace.get -> string?
+Oxbow.AttemptError.Trace.init -> void
+Oxbow.IJobArgs
+Oxbow.IJobArgs.GetInsertOptions() -> Oxbow.InsertOptions?
+Oxbow.IJobInsertMiddleware
+Oxbow.IJobInsertMiddleware.InvokeAsync(Oxbow.JobInsertContext! context, Oxbow.JobInsertDelegate! next) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+Oxbow.IJobWorkMiddleware
+Oxbow.IJobWorkMiddleware.InvokeAsync(Oxbow.JobContext! context, Oxbow.JobWorkDelegate! next) -> System.Threading.Tasks.Task!
+Oxbow.InsertManyItem
+Oxbow.InsertManyItem.<Clone>$() -> Oxbow.InsertManyItem!
+Oxbow.InsertManyItem.Args.get -> Oxbow.IJobArgs!
+Oxbow.InsertManyItem.Args.init -> void
+Oxbow.InsertManyItem.Deconstruct(out Oxbow.IJobArgs! Args, out Oxbow.InsertOptions? Options) -> void
+Oxbow.InsertManyItem.Equals(Oxbow.InsertManyItem? other) -> bool
+Oxbow.InsertManyItem.InsertManyItem(Oxbow.IJobArgs! Args, Oxbow.InsertOptions? Options = null) -> void
+Oxbow.InsertManyItem.Options.get -> Oxbow.InsertOptions?
+Oxbow.InsertManyItem.Options.init -> void
+Oxbow.InsertOptions
+Oxbow.InsertOptions.<Clone>$() -> Oxbow.InsertOptions!
+Oxbow.InsertOptions.Equals(Oxbow.InsertOptions? other) -> bool
+Oxbow.InsertOptions.InsertOptions() -> void
+Oxbow.InsertOptions.MaxAttempts.get -> int?
+Oxbow.InsertOptions.MaxAttempts.init -> void
+Oxbow.InsertOptions.Metadata.get -> System.Text.Json.Nodes.JsonObject?
+Oxbow.InsertOptions.Metadata.init -> void
+Oxbow.InsertOptions.Priority.get -> int?
+Oxbow.InsertOptions.Priority.init -> void
+Oxbow.InsertOptions.Queue.get -> string?
+Oxbow.InsertOptions.Queue.init -> void
+Oxbow.InsertOptions.ScheduledAt.get -> System.DateTimeOffset?
+Oxbow.InsertOptions.ScheduledAt.init -> void
+Oxbow.InsertOptions.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
+Oxbow.InsertOptions.Tags.init -> void
+Oxbow.InsertOptions.Unique.get -> Oxbow.UniqueOptions?
+Oxbow.InsertOptions.Unique.init -> void
+Oxbow.InsertResult
+Oxbow.InsertResult.<Clone>$() -> Oxbow.InsertResult!
+Oxbow.InsertResult.Deconstruct(out Oxbow.JobRow! Job, out bool UniqueSkippedAsDuplicate) -> void
+Oxbow.InsertResult.Equals(Oxbow.InsertResult? other) -> bool
+Oxbow.InsertResult.InsertResult(Oxbow.JobRow! Job, bool UniqueSkippedAsDuplicate) -> void
+Oxbow.InsertResult.Job.get -> Oxbow.JobRow!
+Oxbow.InsertResult.Job.init -> void
+Oxbow.InsertResult.UniqueSkippedAsDuplicate.get -> bool
+Oxbow.InsertResult.UniqueSkippedAsDuplicate.init -> void
+Oxbow.IOxbowClient
+Oxbow.IOxbowClient.CancelAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.IOxbowClient.DeleteAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.IOxbowClient.GetAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.IOxbowClient.InsertAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, TArgs args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.InsertResult!>!
+Oxbow.IOxbowClient.InsertAsync<TArgs>(TArgs args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.InsertResult!>!
+Oxbow.IOxbowClient.InsertManyAsync(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+Oxbow.IOxbowClient.InsertManyAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+Oxbow.IOxbowClient.ListAsync(Oxbow.JobListQuery! query, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobListResult!>!
+Oxbow.IOxbowClient.PauseQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.IOxbowClient.ResumeQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.IOxbowClient.RetryAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.IRetryPolicy
+Oxbow.IRetryPolicy.NextRetry(Oxbow.JobRow! job) -> System.DateTimeOffset
+Oxbow.IWorker<TArgs>
+Oxbow.IWorker<TArgs>.GetNextRetry(Oxbow.Job<TArgs>! job) -> System.DateTimeOffset?
+Oxbow.IWorker<TArgs>.GetTimeout(Oxbow.Job<TArgs>! job) -> System.TimeSpan?
+Oxbow.IWorker<TArgs>.WorkAsync(Oxbow.Job<TArgs>! job, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.Job<TArgs>
+Oxbow.Job<TArgs>.Args.get -> TArgs
+Oxbow.Job<TArgs>.Attempt.get -> int
+Oxbow.Job<TArgs>.Errors.get -> System.Collections.Generic.IReadOnlyList<Oxbow.AttemptError!>!
+Oxbow.Job<TArgs>.Id.get -> long
+Oxbow.Job<TArgs>.Kind.get -> string!
+Oxbow.Job<TArgs>.MaxAttempts.get -> int
+Oxbow.Job<TArgs>.Metadata.get -> System.Text.Json.JsonElement
+Oxbow.Job<TArgs>.Queue.get -> string!
+Oxbow.Job<TArgs>.Row.get -> Oxbow.JobRow!
+Oxbow.JobCancelException
+Oxbow.JobCancelException.JobCancelException() -> void
+Oxbow.JobCancelException.JobCancelException(string! message, System.Exception! innerException) -> void
+Oxbow.JobCancelException.JobCancelException(string! message) -> void
+Oxbow.JobContext
+Oxbow.JobContext.Args.get -> Oxbow.IJobArgs!
+Oxbow.JobContext.CancellationToken.get -> System.Threading.CancellationToken
+Oxbow.JobContext.Job.get -> Oxbow.JobRow!
+Oxbow.JobContext.Services.get -> System.IServiceProvider!
+Oxbow.JobInsertContext
+Oxbow.JobInsertContext.CancellationToken.get -> System.Threading.CancellationToken
+Oxbow.JobInsertContext.Jobs.get -> System.Collections.Generic.IReadOnlyList<Oxbow.JobInsertParams!>!
+Oxbow.JobInsertDelegate
+Oxbow.JobInsertParams
+Oxbow.JobInsertParams.Args.get -> Oxbow.IJobArgs!
+Oxbow.JobInsertParams.Kind.get -> string!
+Oxbow.JobInsertParams.MaxAttempts.get -> int
+Oxbow.JobInsertParams.MaxAttempts.set -> void
+Oxbow.JobInsertParams.Metadata.get -> System.Text.Json.Nodes.JsonObject!
+Oxbow.JobInsertParams.Priority.get -> int
+Oxbow.JobInsertParams.Priority.set -> void
+Oxbow.JobInsertParams.Queue.get -> string!
+Oxbow.JobInsertParams.Queue.set -> void
+Oxbow.JobInsertParams.ScheduledAt.get -> System.DateTimeOffset?
+Oxbow.JobInsertParams.ScheduledAt.set -> void
+Oxbow.JobInsertParams.Tags.get -> System.Collections.Generic.IList<string!>!
+Oxbow.JobKindAttribute
+Oxbow.JobKindAttribute.Aliases.get -> string![]!
+Oxbow.JobKindAttribute.Aliases.init -> void
+Oxbow.JobKindAttribute.JobKindAttribute(string! kind) -> void
+Oxbow.JobKindAttribute.Kind.get -> string!
+Oxbow.JobListQuery
+Oxbow.JobListQuery.<Clone>$() -> Oxbow.JobListQuery!
+Oxbow.JobListQuery.Cursor.get -> string?
+Oxbow.JobListQuery.Cursor.init -> void
+Oxbow.JobListQuery.Descending.get -> bool
+Oxbow.JobListQuery.Descending.init -> void
+Oxbow.JobListQuery.Equals(Oxbow.JobListQuery? other) -> bool
+Oxbow.JobListQuery.JobListQuery() -> void
+Oxbow.JobListQuery.Kinds.get -> System.Collections.Generic.IReadOnlyList<string!>?
+Oxbow.JobListQuery.Kinds.init -> void
+Oxbow.JobListQuery.Limit.get -> int
+Oxbow.JobListQuery.Limit.init -> void
+Oxbow.JobListQuery.Queues.get -> System.Collections.Generic.IReadOnlyList<string!>?
+Oxbow.JobListQuery.Queues.init -> void
+Oxbow.JobListQuery.States.get -> System.Collections.Generic.IReadOnlyList<Oxbow.JobState>?
+Oxbow.JobListQuery.States.init -> void
+Oxbow.JobListResult
+Oxbow.JobListResult.<Clone>$() -> Oxbow.JobListResult!
+Oxbow.JobListResult.Deconstruct(out System.Collections.Generic.IReadOnlyList<Oxbow.JobRow!>! Jobs, out string? NextCursor) -> void
+Oxbow.JobListResult.Equals(Oxbow.JobListResult? other) -> bool
+Oxbow.JobListResult.JobListResult(System.Collections.Generic.IReadOnlyList<Oxbow.JobRow!>! Jobs, string? NextCursor) -> void
+Oxbow.JobListResult.Jobs.get -> System.Collections.Generic.IReadOnlyList<Oxbow.JobRow!>!
+Oxbow.JobListResult.Jobs.init -> void
+Oxbow.JobListResult.NextCursor.get -> string?
+Oxbow.JobListResult.NextCursor.init -> void
+Oxbow.JobRow
+Oxbow.JobRow.Args.get -> System.Text.Json.JsonElement
+Oxbow.JobRow.Args.init -> void
+Oxbow.JobRow.Attempt.get -> int
+Oxbow.JobRow.Attempt.init -> void
+Oxbow.JobRow.AttemptedAt.get -> System.DateTimeOffset?
+Oxbow.JobRow.AttemptedAt.init -> void
+Oxbow.JobRow.AttemptedBy.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Oxbow.JobRow.AttemptedBy.init -> void
+Oxbow.JobRow.CreatedAt.get -> System.DateTimeOffset
+Oxbow.JobRow.CreatedAt.init -> void
+Oxbow.JobRow.Errors.get -> System.Collections.Generic.IReadOnlyList<Oxbow.AttemptError!>!
+Oxbow.JobRow.Errors.init -> void
+Oxbow.JobRow.FinalizedAt.get -> System.DateTimeOffset?
+Oxbow.JobRow.FinalizedAt.init -> void
+Oxbow.JobRow.Id.get -> long
+Oxbow.JobRow.Id.init -> void
+Oxbow.JobRow.JobRow() -> void
+Oxbow.JobRow.Kind.get -> string!
+Oxbow.JobRow.Kind.init -> void
+Oxbow.JobRow.MaxAttempts.get -> int
+Oxbow.JobRow.MaxAttempts.init -> void
+Oxbow.JobRow.Metadata.get -> System.Text.Json.JsonElement
+Oxbow.JobRow.Metadata.init -> void
+Oxbow.JobRow.Priority.get -> int
+Oxbow.JobRow.Priority.init -> void
+Oxbow.JobRow.Queue.get -> string!
+Oxbow.JobRow.Queue.init -> void
+Oxbow.JobRow.ScheduledAt.get -> System.DateTimeOffset
+Oxbow.JobRow.ScheduledAt.init -> void
+Oxbow.JobRow.State.get -> Oxbow.JobState
+Oxbow.JobRow.State.init -> void
+Oxbow.JobRow.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Oxbow.JobRow.Tags.init -> void
+Oxbow.JobSnoozeException
+Oxbow.JobSnoozeException.Duration.get -> System.TimeSpan
+Oxbow.JobSnoozeException.JobSnoozeException(System.TimeSpan duration) -> void
+Oxbow.JobState
+Oxbow.JobState.Available = 0 -> Oxbow.JobState
+Oxbow.JobState.Cancelled = 1 -> Oxbow.JobState
+Oxbow.JobState.Completed = 2 -> Oxbow.JobState
+Oxbow.JobState.Discarded = 3 -> Oxbow.JobState
+Oxbow.JobState.Pending = 4 -> Oxbow.JobState
+Oxbow.JobState.Retryable = 5 -> Oxbow.JobState
+Oxbow.JobState.Running = 6 -> Oxbow.JobState
+Oxbow.JobState.Scheduled = 7 -> Oxbow.JobState
+Oxbow.JobWorkDelegate
+Oxbow.OxbowMigration
+Oxbow.OxbowMigration.<Clone>$() -> Oxbow.OxbowMigration!
+Oxbow.OxbowMigration.Deconstruct(out int Version, out bool Up, out string! Sql) -> void
+Oxbow.OxbowMigration.Equals(Oxbow.OxbowMigration? other) -> bool
+Oxbow.OxbowMigration.OxbowMigration(int Version, bool Up, string! Sql) -> void
+Oxbow.OxbowMigration.Sql.get -> string!
+Oxbow.OxbowMigration.Sql.init -> void
+Oxbow.OxbowMigration.Up.get -> bool
+Oxbow.OxbowMigration.Up.init -> void
+Oxbow.OxbowMigration.Version.get -> int
+Oxbow.OxbowMigration.Version.init -> void
+Oxbow.OxbowOptions
+Oxbow.OxbowOptions.AddPeriodicJob(Oxbow.PeriodicSchedule! schedule, System.Func<Oxbow.IJobArgs!>! createArgs, Oxbow.InsertOptions? options = null, bool runOnStart = false) -> Oxbow.OxbowOptions!
+Oxbow.OxbowOptions.CancelledJobRetention.get -> System.TimeSpan
+Oxbow.OxbowOptions.CancelledJobRetention.set -> void
+Oxbow.OxbowOptions.ClientId.get -> string?
+Oxbow.OxbowOptions.ClientId.set -> void
+Oxbow.OxbowOptions.CompletedJobRetention.get -> System.TimeSpan
+Oxbow.OxbowOptions.CompletedJobRetention.set -> void
+Oxbow.OxbowOptions.DataSourceServiceKey.get -> object?
+Oxbow.OxbowOptions.DataSourceServiceKey.set -> void
+Oxbow.OxbowOptions.DiscardedJobRetention.get -> System.TimeSpan
+Oxbow.OxbowOptions.DiscardedJobRetention.set -> void
+Oxbow.OxbowOptions.FetchCooldown.get -> System.TimeSpan
+Oxbow.OxbowOptions.FetchCooldown.set -> void
+Oxbow.OxbowOptions.FetchPollInterval.get -> System.TimeSpan
+Oxbow.OxbowOptions.FetchPollInterval.set -> void
+Oxbow.OxbowOptions.JobTimeout.get -> System.TimeSpan
+Oxbow.OxbowOptions.JobTimeout.set -> void
+Oxbow.OxbowOptions.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
+Oxbow.OxbowOptions.JsonSerializerOptions.set -> void
+Oxbow.OxbowOptions.MaxAttempts.get -> int
+Oxbow.OxbowOptions.MaxAttempts.set -> void
+Oxbow.OxbowOptions.OxbowOptions() -> void
+Oxbow.OxbowOptions.PeriodicJobs.get -> System.Collections.Generic.IList<Oxbow.PeriodicJob!>!
+Oxbow.OxbowOptions.PollOnly.get -> bool
+Oxbow.OxbowOptions.PollOnly.set -> void
+Oxbow.OxbowOptions.Queues.get -> System.Collections.Generic.IDictionary<string!, Oxbow.QueueOptions!>!
+Oxbow.OxbowOptions.RescueStuckJobsAfter.get -> System.TimeSpan
+Oxbow.OxbowOptions.RescueStuckJobsAfter.set -> void
+Oxbow.OxbowOptions.SchedulerInterval.get -> System.TimeSpan
+Oxbow.OxbowOptions.SchedulerInterval.set -> void
+Oxbow.OxbowOptions.Schema.get -> string!
+Oxbow.OxbowOptions.Schema.set -> void
+Oxbow.OxbowOptions.SkipUnknownKindCheck.get -> bool
+Oxbow.OxbowOptions.SkipUnknownKindCheck.set -> void
+Oxbow.OxbowOptions.TablePrefix.get -> string!
+Oxbow.OxbowOptions.TablePrefix.set -> void
+Oxbow.OxbowSchema
+Oxbow.PeriodicJob
+Oxbow.PeriodicJob.<Clone>$() -> Oxbow.PeriodicJob!
+Oxbow.PeriodicJob.CreateArgs.get -> System.Func<Oxbow.IJobArgs!>!
+Oxbow.PeriodicJob.CreateArgs.init -> void
+Oxbow.PeriodicJob.Deconstruct(out Oxbow.PeriodicSchedule! Schedule, out System.Func<Oxbow.IJobArgs!>! CreateArgs, out Oxbow.InsertOptions? Options, out bool RunOnStart) -> void
+Oxbow.PeriodicJob.Equals(Oxbow.PeriodicJob? other) -> bool
+Oxbow.PeriodicJob.Options.get -> Oxbow.InsertOptions?
+Oxbow.PeriodicJob.Options.init -> void
+Oxbow.PeriodicJob.PeriodicJob(Oxbow.PeriodicSchedule! Schedule, System.Func<Oxbow.IJobArgs!>! CreateArgs, Oxbow.InsertOptions? Options = null, bool RunOnStart = false) -> void
+Oxbow.PeriodicJob.RunOnStart.get -> bool
+Oxbow.PeriodicJob.RunOnStart.init -> void
+Oxbow.PeriodicJob.Schedule.get -> Oxbow.PeriodicSchedule!
+Oxbow.PeriodicJob.Schedule.init -> void
+Oxbow.PeriodicSchedule
+Oxbow.QueueOptions
+Oxbow.QueueOptions.MaxWorkers.get -> int
+Oxbow.QueueOptions.MaxWorkers.set -> void
+Oxbow.QueueOptions.QueueOptions() -> void
+Oxbow.UniqueKeyAttribute
+Oxbow.UniqueKeyAttribute.UniqueKeyAttribute() -> void
+Oxbow.UniqueOptions
+Oxbow.UniqueOptions.<Clone>$() -> Oxbow.UniqueOptions!
+Oxbow.UniqueOptions.ByArgs.get -> bool
+Oxbow.UniqueOptions.ByArgs.init -> void
+Oxbow.UniqueOptions.ByPeriod.get -> System.TimeSpan?
+Oxbow.UniqueOptions.ByPeriod.init -> void
+Oxbow.UniqueOptions.ByQueue.get -> bool
+Oxbow.UniqueOptions.ByQueue.init -> void
+Oxbow.UniqueOptions.ByState.get -> System.Collections.Generic.IReadOnlyList<Oxbow.JobState>?
+Oxbow.UniqueOptions.ByState.init -> void
+Oxbow.UniqueOptions.Equals(Oxbow.UniqueOptions? other) -> bool
+Oxbow.UniqueOptions.ExcludeKind.get -> bool
+Oxbow.UniqueOptions.ExcludeKind.init -> void
+Oxbow.UniqueOptions.UniqueOptions() -> void
+Oxbow.UnknownJobKindException
+Oxbow.UnknownJobKindException.Kind.get -> string!
+Oxbow.UnknownJobKindException.UnknownJobKindException(string! kind) -> void
+static Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions.AddInsertMiddleware<TMiddleware>(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
+static Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions.AddWorker<TArgs, TWorker>(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
+static Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions.AddWorkMiddleware<TMiddleware>(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
+static Microsoft.Extensions.DependencyInjection.OxbowServiceCollectionExtensions.AddOxbow(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<Oxbow.OxbowOptions!>? configure = null) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
+static Oxbow.AttemptError.operator !=(Oxbow.AttemptError? left, Oxbow.AttemptError? right) -> bool
+static Oxbow.AttemptError.operator ==(Oxbow.AttemptError? left, Oxbow.AttemptError? right) -> bool
+static Oxbow.InsertManyItem.operator !=(Oxbow.InsertManyItem? left, Oxbow.InsertManyItem? right) -> bool
+static Oxbow.InsertManyItem.operator ==(Oxbow.InsertManyItem? left, Oxbow.InsertManyItem? right) -> bool
+static Oxbow.InsertOptions.operator !=(Oxbow.InsertOptions? left, Oxbow.InsertOptions? right) -> bool
+static Oxbow.InsertOptions.operator ==(Oxbow.InsertOptions? left, Oxbow.InsertOptions? right) -> bool
+static Oxbow.InsertResult.operator !=(Oxbow.InsertResult? left, Oxbow.InsertResult? right) -> bool
+static Oxbow.InsertResult.operator ==(Oxbow.InsertResult? left, Oxbow.InsertResult? right) -> bool
+static Oxbow.JobListQuery.operator !=(Oxbow.JobListQuery? left, Oxbow.JobListQuery? right) -> bool
+static Oxbow.JobListQuery.operator ==(Oxbow.JobListQuery? left, Oxbow.JobListQuery? right) -> bool
+static Oxbow.JobListResult.operator !=(Oxbow.JobListResult? left, Oxbow.JobListResult? right) -> bool
+static Oxbow.JobListResult.operator ==(Oxbow.JobListResult? left, Oxbow.JobListResult? right) -> bool
+static Oxbow.OxbowMigration.operator !=(Oxbow.OxbowMigration? left, Oxbow.OxbowMigration? right) -> bool
+static Oxbow.OxbowMigration.operator ==(Oxbow.OxbowMigration? left, Oxbow.OxbowMigration? right) -> bool
+static Oxbow.OxbowSchema.GetGrants(string! role, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
+static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 1, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
+static Oxbow.PeriodicJob.operator !=(Oxbow.PeriodicJob? left, Oxbow.PeriodicJob? right) -> bool
+static Oxbow.PeriodicJob.operator ==(Oxbow.PeriodicJob? left, Oxbow.PeriodicJob? right) -> bool
+static Oxbow.PeriodicSchedule.Cron(string! expression, System.TimeZoneInfo? timeZone = null) -> Oxbow.PeriodicSchedule!
+static Oxbow.PeriodicSchedule.Every(System.TimeSpan interval) -> Oxbow.PeriodicSchedule!
+static Oxbow.UniqueOptions.operator !=(Oxbow.UniqueOptions? left, Oxbow.UniqueOptions? right) -> bool
+static Oxbow.UniqueOptions.operator ==(Oxbow.UniqueOptions? left, Oxbow.UniqueOptions? right) -> bool
+virtual Oxbow.JobInsertDelegate.Invoke(Oxbow.JobInsertContext! context) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+virtual Oxbow.JobWorkDelegate.Invoke(Oxbow.JobContext! context) -> System.Threading.Tasks.Task!

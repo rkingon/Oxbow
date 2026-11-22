@@ -1,0 +1,35 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,props,targets,csproj,slnx}]
+indent_size = 2
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace
+dotnet_sort_system_directives_first = true
+# Library code: never capture the caller's sync context.
+dotnet_diagnostic.CA2007.severity = warning
+
+[tests/**.cs]
+dotnet_diagnostic.CA2007.severity = none
+dotnet_diagnostic.CA1707.severity = none
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA1861.severity = none
+dotnet_diagnostic.CA2000.severity = none
+dotnet_diagnostic.CA1849.severity = none
+dotnet_diagnostic.CA1822.severity = none
+dotnet_diagnostic.xUnit1051.severity = none
+
+[src/**.cs]
+# Overloads differ by their required leading parameters (connection, transaction), so optional trailing
+# parameters can't make calls ambiguous.
+dotnet_diagnostic.RS0026.severity = none
+dotnet_diagnostic.RS0027.severity = none
