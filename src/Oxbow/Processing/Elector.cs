@@ -111,6 +111,12 @@ internal sealed class Elector(OxbowRuntime runtime, ILogger logger)
         catch (OperationCanceledException)
         {
         }
+#pragma warning disable CA1031 // A failed term must not stop the elector; the next term restarts maintenance.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            Log.MaintenanceFailed(logger, ex, "leader");
+        }
 
         IsLeader = false;
         Log.LostLeadership(logger, runtime.ClientId);
