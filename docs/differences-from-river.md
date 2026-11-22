@@ -21,3 +21,4 @@ Reference: River `main` at `1f19003`. Each entry gives what differs and why.
 | EF insert | — | Throws without `Database.CurrentTransaction` | Otherwise the job commits ahead of `SaveChanges`. |
 | Tracing | None built in | `oxbow.insert`/`oxbow.work` spans; `traceparent` stored in metadata and linked | OpenTelemetry is the .NET convention. A link, not a parent, because work can run hours later. |
 | Rescue metadata key | `river:rescue_count` | `oxbow:rescue_count` | Namespace. |
+| Pausing an unknown queue | `QueuePause` returns not-found | Creates the queue row already paused | Lets a deploy pause a queue before any node has run it. |

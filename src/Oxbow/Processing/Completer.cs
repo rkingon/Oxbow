@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
@@ -19,66 +21,150 @@ internal sealed record SetStateParams(long Id, JobState State)
     public DateTimeOffset? ScheduledAt { get; init; }
 }
 
-/// <summary>Records attempt outcomes with River's set-state-if-running query, retrying transient failures.</summary>
+/// <summary>
+/// River's batch completer: attempt outcomes are queued and written in batches with the set-state-if-running query, so
+/// finishing a job doesn't cost a round trip of its own. A job's slot is freed as soon as its outcome is queued; the job
+/// stays running in the database until the batch is written, so it can't be fetched again in between. A node that dies
+/// with queued outcomes leaves those jobs running for the rescuer.
+/// </summary>
 internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
 {
+    private const int MaxBatch = 5_000;
+    private const int MaxBacklog = 20_000;
     private const int MaxTries = 3;
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
-    public async Task<JobState?> SetStateAsync(SetStateParams update)
+    // Bounded so a database outage slows workers down instead of growing memory without limit.
+    private readonly Channel<Pending> _queue = Channel.CreateBounded<Pending>(
+        new BoundedChannelOptions(MaxBacklog) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+
+    /// <summary>Queues an outcome. The task completes when it's written, with the job's resulting state.</summary>
+    public async ValueTask<Task<JobState?>> EnqueueAsync(SetStateParams update)
+    {
+        var pending = new Pending(update, new TaskCompletionSource<JobState?>(TaskCreationOptions.RunContinuationsAsynchronously));
+        await _queue.Writer.WriteAsync(pending).ConfigureAwait(false);
+        return pending.Written.Task;
+    }
+
+    /// <summary>Writes queued outcomes until <see cref="Complete"/> is called and the queue is drained.</summary>
+    public async Task RunAsync()
+    {
+        var reader = _queue.Reader;
+        var batch = new List<Pending>(MaxBatch);
+        while (await reader.WaitToReadAsync().ConfigureAwait(false))
+        {
+            var deadline = Stopwatch.GetTimestamp() + (long)(FlushInterval.TotalSeconds * Stopwatch.Frequency);
+            while (batch.Count < MaxBatch)
+            {
+                if (reader.TryRead(out var pending))
+                {
+                    batch.Add(pending);
+                    continue;
+                }
+
+                var remaining = deadline - Stopwatch.GetTimestamp();
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                using var wait = new CancellationTokenSource(TimeSpan.FromSeconds((double)remaining / Stopwatch.Frequency));
+                try
+                {
+                    if (!await reader.WaitToReadAsync(wait.Token).ConfigureAwait(false))
+                    {
+                        break;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            await WriteAsync(batch).ConfigureAwait(false);
+            batch.Clear();
+        }
+    }
+
+    /// <summary>Stops accepting outcomes; <see cref="RunAsync"/> returns once the queue is written.</summary>
+    public void Complete() => _queue.Writer.TryComplete();
+
+    private async Task WriteAsync(List<Pending> batch)
     {
         for (var attempt = 1; ; attempt++)
         {
             using var timeout = new CancellationTokenSource(Timeout);
             try
             {
-                return await ExecuteAsync(update, timeout.Token).ConfigureAwait(false);
+                var states = await ExecuteAsync(batch, timeout.Token).ConfigureAwait(false);
+                foreach (var pending in batch)
+                {
+                    pending.Written.TrySetResult(states.TryGetValue(pending.Update.Id, out var state) ? state : null);
+                }
+
+                return;
             }
             catch (Exception ex) when (attempt < MaxTries && ex is NpgsqlException or OperationCanceledException)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(100 * attempt * attempt), CancellationToken.None).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(200 * attempt * attempt), CancellationToken.None).ConfigureAwait(false);
             }
+#pragma warning disable CA1031 // Losing a batch must not stop the completer; the rescuer recovers the jobs.
             catch (Exception ex)
+#pragma warning restore CA1031
             {
-                Log.CompleteFailed(logger, ex, update.Id);
-                return null;
+                foreach (var pending in batch)
+                {
+                    Log.CompleteFailed(logger, ex, pending.Update.Id);
+                    pending.Written.TrySetResult(null);
+                }
+
+                return;
             }
         }
     }
 
-    private async Task<JobState?> ExecuteAsync(SetStateParams update, CancellationToken cancellationToken)
+    private async Task<Dictionary<long, JobState>> ExecuteAsync(List<Pending> batch, CancellationToken cancellationToken)
     {
+        var updates = batch.Select(p => p.Update).ToArray();
         var placeholderTime = DateTime.UnixEpoch;
         var command = runtime.DataSource.CreateCommand(runtime.Sql.SetStateIfRunning);
         await using (command.ConfigureAwait(false))
         {
             var p = command.Parameters;
-            p.Add(new NpgsqlParameter<long[]>("id", [update.Id]));
-            p.Add(new NpgsqlParameter<bool[]>("attempt_do_update", [update.Attempt is not null]));
-            p.Add(new NpgsqlParameter<int[]>("attempt", [update.Attempt ?? 0]));
-            p.Add(new NpgsqlParameter<bool[]>("errors_do_update", [update.Error is not null]));
-            p.Add(OxbowClient.TextArray("errors", [update.Error ?? "{}"]));
-            p.Add(new NpgsqlParameter<bool[]>("finalized_at_do_update", [update.FinalizedAt is not null]));
+            p.Add(new NpgsqlParameter<long[]>("id", updates.Select(u => u.Id).ToArray()));
+            p.Add(new NpgsqlParameter<bool[]>("attempt_do_update", updates.Select(u => u.Attempt is not null).ToArray()));
+            p.Add(new NpgsqlParameter<int[]>("attempt", updates.Select(u => u.Attempt ?? 0).ToArray()));
+            p.Add(new NpgsqlParameter<bool[]>("errors_do_update", updates.Select(u => u.Error is not null).ToArray()));
+            p.Add(OxbowClient.TextArray("errors", updates.Select(u => u.Error ?? "{}").ToArray()));
+            p.Add(new NpgsqlParameter<bool[]>("finalized_at_do_update", updates.Select(u => u.FinalizedAt is not null).ToArray()));
             p.Add(new NpgsqlParameter("finalized_at", NpgsqlDbType.Array | NpgsqlDbType.TimestampTz)
             {
-                Value = new[] { update.FinalizedAt?.UtcDateTime ?? placeholderTime },
+                Value = updates.Select(u => u.FinalizedAt?.UtcDateTime ?? placeholderTime).ToArray(),
             });
-            p.Add(new NpgsqlParameter<bool[]>("metadata_do_merge", [update.MetadataUpdates is not null]));
-            p.Add(OxbowClient.TextArray("metadata_updates", [update.MetadataUpdates ?? "{}"]));
-            p.Add(new NpgsqlParameter<bool[]>("scheduled_at_do_update", [update.ScheduledAt is not null]));
+            p.Add(new NpgsqlParameter<bool[]>("metadata_do_merge", updates.Select(u => u.MetadataUpdates is not null).ToArray()));
+            p.Add(OxbowClient.TextArray("metadata_updates", updates.Select(u => u.MetadataUpdates ?? "{}").ToArray()));
+            p.Add(new NpgsqlParameter<bool[]>("scheduled_at_do_update", updates.Select(u => u.ScheduledAt is not null).ToArray()));
             p.Add(new NpgsqlParameter("scheduled_at", NpgsqlDbType.Array | NpgsqlDbType.TimestampTz)
             {
-                Value = new[] { update.ScheduledAt?.UtcDateTime ?? placeholderTime },
+                Value = updates.Select(u => u.ScheduledAt?.UtcDateTime ?? placeholderTime).ToArray(),
             });
-            p.Add(OxbowClient.TextArray("state", [JobStates.ToDb(update.State)]));
+            p.Add(OxbowClient.TextArray("state", updates.Select(u => JobStates.ToDb(u.State)).ToArray()));
 
+            var states = new Dictionary<long, JobState>(updates.Length);
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
             {
-                return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-                    ? JobStates.Parse(reader.GetString(1))
-                    : null;
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    states[reader.GetInt64(0)] = JobStates.Parse(reader.GetString(1));
+                }
             }
+
+            return states;
         }
     }
+
+    private sealed record Pending(SetStateParams Update, TaskCompletionSource<JobState?> Written);
 }

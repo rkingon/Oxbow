@@ -23,5 +23,6 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IsPackable>false</IsPackable>
+    <Version>0.1.0-dev</Version>
   </PropertyGroup>
 </Project>

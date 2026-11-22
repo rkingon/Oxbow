@@ -172,9 +172,10 @@ builder.Services.AddOpenTelemetry()
 | `Oxbow.Testing` | Insert assertions and an inline worker harness |
 | `Oxbow.Cli` | The `oxbow` dotnet tool: print or apply the schema |
 
-## Design
+## Docs
 
-[docs/design.md](docs/design.md) covers the schema, the state machine, fetching, leader election and maintenance.
+[docs/](docs/README.md) has a page per feature. [docs/design.md](docs/design.md) covers the schema, the state machine,
+fetching, leader election and maintenance.
 [docs/differences-from-river.md](docs/differences-from-river.md) lists every deliberate deviation from River.
 
 ## License

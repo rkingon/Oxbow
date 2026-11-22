@@ -26,7 +26,7 @@ jobs:
       - run: dotnet build -c Release -p:Version=$VERSION
       - run: dotnet test --project tests/Oxbow.Tests -c Release --no-build
       - run: dotnet test --project tests/Oxbow.IntegrationTests -c Release --no-build
-      - run: dotnet pack src/Oxbow -c Release --no-build -p:Version=$VERSION -o artifacts
+      - run: dotnet pack -c Release --no-build -p:Version=$VERSION -o artifacts
       - name: NuGet login (OIDC)
         id: login
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0

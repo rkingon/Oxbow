@@ -28,6 +28,8 @@ internal sealed class OxbowHostedService(
     private readonly Dictionary<string, Producer> _producers = new(StringComparer.Ordinal);
     private readonly List<Task> _loops = [];
     private Task _notifierLoop = Task.CompletedTask;
+    private Task _completerLoop = Task.CompletedTask;
+    private Completer? _completer;
 
     internal Elector? Elector { get; private set; }
 
@@ -41,8 +43,9 @@ internal sealed class OxbowHostedService(
             return;
         }
 
-        var completer = new Completer(runtime, _logger);
-        var executor = new JobExecutor(runtime, workers, scopes, retryPolicy, completer, timeProvider, _logger);
+        _completer = new Completer(runtime, _logger);
+        _completerLoop = Task.Run(_completer.RunAsync, CancellationToken.None);
+        var executor = new JobExecutor(runtime, workers, scopes, retryPolicy, _completer, timeProvider, _logger);
         foreach (var (queue, queueOptions) in options.Queues)
         {
             _producers[queue] = new Producer(queue, queueOptions, runtime, executor, timeProvider, _logger);
@@ -100,6 +103,8 @@ internal sealed class OxbowHostedService(
             }
         }
 
+        _completer?.Complete();
+        await _completerLoop.ConfigureAwait(false);
         await _notifierSource.CancelAsync().ConfigureAwait(false);
         await _notifierLoop.ConfigureAwait(false);
     }

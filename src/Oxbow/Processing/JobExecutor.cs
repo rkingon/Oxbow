@@ -130,7 +130,7 @@ internal sealed class JobExecutor(
     {
         if (error is null)
         {
-            await completer.SetStateAsync(new SetStateParams(row.Id, JobState.Completed) { FinalizedAt = now }).ConfigureAwait(false);
+            await completer.EnqueueAsync(new SetStateParams(row.Id, JobState.Completed) { FinalizedAt = now }).ConfigureAwait(false);
             return "completed";
         }
 
@@ -139,7 +139,7 @@ internal sealed class JobExecutor(
             var snoozes = row.Metadata.TryGetProperty("snoozes", out var count) && count.ValueKind == JsonValueKind.Number
                 ? count.GetInt64() + 1
                 : 1;
-            await completer.SetStateAsync(new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
+            await completer.EnqueueAsync(new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = now + snooze.Duration,
@@ -151,7 +151,7 @@ internal sealed class JobExecutor(
         if (cancellation.Shutdown && error is OperationCanceledException)
         {
             // Soft stop at shutdown: back to available without spending the attempt.
-            await completer.SetStateAsync(new SetStateParams(row.Id, JobState.Available)
+            await completer.EnqueueAsync(new SetStateParams(row.Id, JobState.Available)
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = now,
@@ -172,14 +172,14 @@ internal sealed class JobExecutor(
 
         if (error is JobCancelException)
         {
-            await completer.SetStateAsync(new SetStateParams(row.Id, JobState.Cancelled) { Error = attemptError, FinalizedAt = now })
+            await completer.EnqueueAsync(new SetStateParams(row.Id, JobState.Cancelled) { Error = attemptError, FinalizedAt = now })
                 .ConfigureAwait(false);
             return "cancelled";
         }
 
         if (row.Attempt >= row.MaxAttempts)
         {
-            await completer.SetStateAsync(new SetStateParams(row.Id, JobState.Discarded) { Error = attemptError, FinalizedAt = now })
+            await completer.EnqueueAsync(new SetStateParams(row.Id, JobState.Discarded) { Error = attemptError, FinalizedAt = now })
                 .ConfigureAwait(false);
             return "discarded";
         }
@@ -191,12 +191,14 @@ internal sealed class JobExecutor(
             nextRetry = _fallbackRetryPolicy.NextRetry(row);
         }
 
-        var state = await completer.SetStateAsync(new SetStateParams(row.Id, StateFor(nextRetry - now, JobState.Retryable))
+        await completer.EnqueueAsync(new SetStateParams(row.Id, StateFor(nextRetry - now, JobState.Retryable))
         {
             Error = attemptError,
             ScheduledAt = nextRetry,
         }).ConfigureAwait(false);
-        return state == JobState.Cancelled ? "cancelled" : "errored";
+
+        // A cancel request turns the retry into a cancellation when the outcome is written.
+        return cancellation.Remote ? "cancelled" : "errored";
     }
 
     /// <summary>Within one scheduler interval, a job goes straight to available instead of waiting for the scheduler.</summary>

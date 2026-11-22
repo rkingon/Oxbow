@@ -180,14 +180,14 @@ builder.Services.AddOxbow(o =>
         o.Queues["email"]   = new() { MaxWorkers = 10 };
         o.AddPeriodicJob(PeriodicSchedule.Cron("0 * * * *"), () => new Cleanup(), runOnStart: true);
     })
-    .AddWorker<SendEmailWorker>()                                 // scoped; resolved in a fresh scope per job
+    .AddWorker<SendEmail, SendEmailWorker>()                      // scoped; resolved in a fresh scope per job
     .AddWorkMiddleware<TenantMiddleware>()
     .AddInsertMiddleware<StampCorrelationId>();
 ```
 
 - `OxbowOptions` is validated on start (`ValidateOnStart`): queue names, schema and prefix identifiers, positive
   intervals, and retention periods.
-- A different data source can be chosen with `o.DataSourceServiceKey` (keyed services) or `o.UseDataSource(sp => …)`.
+- A different data source can be chosen with `o.DataSourceServiceKey` (keyed services).
 - With no queues configured, Oxbow runs insert-only: it registers the client, and the hosted service starts nothing.
 
 ## Client API (`IOxbowClient`, singleton)
@@ -199,7 +199,7 @@ builder.Services.AddOxbow(o =>
 | `InsertManyAsync(IEnumerable<InsertManyItem>, ct)` and the connection/transaction overload | Multi-row `INSERT … SELECT unnest(…)` with unique support; returns rows (see bulk insert). |
 | `CancelAsync(id, ct)` | Not started: becomes cancelled immediately. Running: `cancel_attempted_at` is set and a control NOTIFY goes out. Finalized: returned as is. |
 | `RetryAsync(id, ct)`, `DeleteAsync(id, ct)`, `GetAsync(id, ct)` | River semantics. Delete and retry never touch a running job. |
-| `ListAsync(JobListQuery, ct)` | Filters (kinds, queues, states, ids, priorities, metadata containment), ordering, keyset cursor. |
+| `ListAsync(JobListQuery, ct)` | Filters (kinds, queues, states), ascending or descending by ID, keyset cursor. |
 | `PauseQueueAsync(name, ct)`, `ResumeQueueAsync(name, ct)` | Updates the `{p}queue` row and sends a control NOTIFY in one statement; `"*"` means all queues. |
 
 `InsertResult` is `(JobRow Job, bool UniqueSkippedAsDuplicate)`. EF: `client.InsertAsync(dbContext, args, …)` uses
@@ -272,9 +272,11 @@ A kind with no registered worker is handled the River way: the attempt fails wit
 and retries with backoff. A rolling deploy heals itself, and a kind that's really gone ends up visibly `discarded` after
 max attempts.
 
-**Completer.** Updates are batched through `JobSetStateIfRunningMany`: the completer flushes every 50 ms or at 5,000
-rows, applies backpressure when the backlog passes 10,000, and retries transient errors three times. Slice 1 starts
-inline (one row per call through the same SQL), and batching arrives later without any change to the API.
+**Completer.** Outcomes are queued and written in batches through `JobSetStateIfRunningMany`: the completer flushes
+every 50 ms or at 5,000 rows, makes workers wait when the backlog reaches 20,000, and retries a failed batch three
+times. A job's slot is freed once its outcome is queued; the row stays `running` until the batch is written, so it
+can't be fetched twice. Shutdown drains the queue. A node that dies with queued outcomes leaves those jobs to the
+rescuer.
 
 **Elector** (River's `leadership/elector.go`). Every 5 s ±1 s, a follower runs `DELETE expired; INSERT … ON CONFLICT
 (name) DO NOTHING RETURNING *` in one transaction. The TTL is the interval plus 10 s, and a leader trusts its term only
@@ -315,7 +317,8 @@ jobs are enqueued when the enqueuer starts, which on a failover means the new le
    between two transactions makes the second wait for the first to commit or roll back. Uniqueness is never checked in
    application code.
 6. NOTIFY `{s}.{p}insert` for each distinct queue that got an `available` row, on the same connection and inside the
-   same transaction. A per-queue limiter skips NOTIFYs within the fetch cooldown, as River does.
+   same transaction. As in River, a per-queue limiter sends at most one NOTIFY per fetch cooldown, since one wake-up
+   makes the producer fetch everything available; a wake-up lost to a rolled-back transaction is covered by polling.
 
 **Bulk insert** (`InsertManyAsync`) is one statement, River's `JobInsertFastMany` shape:
 `INSERT … SELECT … FROM unnest(@args::jsonb[], @kinds::text[], @states::text[], …)` with the state cast in SQL
@@ -356,22 +359,24 @@ safe. Any job that doesn't report back is left `running`, and the rescuer picks 
   `traceparent` in the job's metadata, and the work span links to it, a link rather than a parent, because the job can
   run hours later.
 - A `Meter("Oxbow")` with:
-  - counters `oxbow.jobs.inserted` and `oxbow.jobs.finalized{state}`;
+  - counters `oxbow.jobs.inserted` and `oxbow.jobs.attempts{queue,kind,outcome}`;
   - histograms `oxbow.job.duration` and `oxbow.job.queue_wait`;
   - the observable gauge `oxbow.queue.depth{queue,state}`.
 - No OpenTelemetry SDK dependency.
-- Time comes from `TimeProvider`, which tests can fake, and is passed to SQL as `@now` the way River passes it.
+- In-process time comes from `TimeProvider`. SQL uses the database's `now()` for fetching, scheduling and
+  finalizing; app time is used for computed future times (retries, snoozes), as in River.
 
 ## Testing package
 
-- `OxbowAssert.InsertedAsync<TArgs>(connection | transaction | dataSource, expected?, InsertedJobFilter?)`,
-  `NotInsertedAsync`, `ManyInsertedAsync`. These assertions don't depend on a test framework and throw
-  `OxbowAssertionException`.
-- `WorkerHarness<TWorker, TArgs>`: runs a worker inline with a real DI scope and the registered work middleware, using an
-  in-memory `Job<TArgs>`, and returns a `WorkResult` (`Completed`, `Errored(ex)`, `Snoozed(d)`, `Cancelled(ex)`). No
-  database is involved.
+- `new OxbowAssert(schema, prefix)` with `InsertedAsync<TArgs>`, `NotInsertedAsync<TArgs>` and `FindAsync<TArgs>`,
+  each taking a connection, an optional transaction and an `InsertedJobFilter<TArgs>`. They don't depend on a test
+  framework and throw `OxbowAssertionException`.
+- `WorkerHarness<TArgs, TWorker>`: runs a worker inline with a real DI scope, the registered work middleware and the
+  worker's timeout, using an in-memory `Job<TArgs>`, and returns a `WorkResult` (`Completed`, `Errored`, `Snoozed`,
+  `Cancelled`, `TimedOut`). No database is involved.
 
-## Build order
+## Not yet built
 
-The slices follow the brief, and each is green before the next. Slice 1 includes the least-privilege test fixture, so
-every later slice inherits it rather than retrofitting it.
+- `InsertManyFastAsync` (binary COPY, no uniqueness); see bulk insert above.
+- `Oxbow.Dashboard`.
+- Durable periodic-job schedules (River Pro).

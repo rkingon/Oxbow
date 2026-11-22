@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -15,6 +16,7 @@ internal sealed partial class OxbowClient(
     TimeProvider timeProvider) : IOxbowClient
 {
     private readonly IJobInsertMiddleware[] _insertMiddleware = insertMiddleware.ToArray();
+    private readonly ConcurrentDictionary<string, long> _lastNotified = new(StringComparer.Ordinal);
 
     public async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
@@ -350,6 +352,7 @@ internal sealed partial class OxbowClient(
             .Where(r => !r.UniqueSkippedAsDuplicate && r.Job.State == JobState.Available)
             .Select(r => r.Job.Queue)
             .Distinct(StringComparer.Ordinal)
+            .Where(ShouldNotify)
             .ToArray();
         if (queuesToNotify.Length > 0)
         {
@@ -371,6 +374,35 @@ internal sealed partial class OxbowClient(
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// River's notify limiter: one wake-up per queue per fetch cooldown is enough, since a woken producer fetches
+    /// everything available. A wake-up lost to a rolled-back transaction is covered by polling.
+    /// </summary>
+    private bool ShouldNotify(string queue)
+    {
+        var now = timeProvider.GetTimestamp();
+        var cooldown = (long)(runtime.Options.FetchCooldown.TotalSeconds * timeProvider.TimestampFrequency);
+        while (true)
+        {
+            if (_lastNotified.TryGetValue(queue, out var last))
+            {
+                if (now - last < cooldown)
+                {
+                    return false;
+                }
+
+                if (_lastNotified.TryUpdate(queue, now, last))
+                {
+                    return true;
+                }
+            }
+            else if (_lastNotified.TryAdd(queue, now))
+            {
+                return true;
+            }
+        }
     }
 
     internal static NpgsqlParameter TextArray(string name, string[]? values) =>
