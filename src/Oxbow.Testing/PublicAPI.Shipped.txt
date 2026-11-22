@@ -1,1 +1,58 @@
 #nullable enable
+override Oxbow.Testing.InsertedJobFilter<TArgs>.Equals(object? obj) -> bool
+override Oxbow.Testing.InsertedJobFilter<TArgs>.GetHashCode() -> int
+override Oxbow.Testing.InsertedJobFilter<TArgs>.ToString() -> string!
+override Oxbow.Testing.WorkResult.Equals(object? obj) -> bool
+override Oxbow.Testing.WorkResult.GetHashCode() -> int
+override Oxbow.Testing.WorkResult.ToString() -> string!
+Oxbow.Testing.InsertedJobFilter<TArgs>
+Oxbow.Testing.InsertedJobFilter<TArgs>.<Clone>$() -> Oxbow.Testing.InsertedJobFilter<TArgs>!
+Oxbow.Testing.InsertedJobFilter<TArgs>.Args.get -> System.Func<TArgs, bool>?
+Oxbow.Testing.InsertedJobFilter<TArgs>.Args.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.Equals(Oxbow.Testing.InsertedJobFilter<TArgs>? other) -> bool
+Oxbow.Testing.InsertedJobFilter<TArgs>.InsertedJobFilter() -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions?
+Oxbow.Testing.InsertedJobFilter<TArgs>.JsonSerializerOptions.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.MaxAttempts.get -> int?
+Oxbow.Testing.InsertedJobFilter<TArgs>.MaxAttempts.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.Priority.get -> int?
+Oxbow.Testing.InsertedJobFilter<TArgs>.Priority.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.Queue.get -> string?
+Oxbow.Testing.InsertedJobFilter<TArgs>.Queue.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.State.get -> Oxbow.JobState?
+Oxbow.Testing.InsertedJobFilter<TArgs>.State.init -> void
+Oxbow.Testing.InsertedJobFilter<TArgs>.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
+Oxbow.Testing.InsertedJobFilter<TArgs>.Tags.init -> void
+Oxbow.Testing.OxbowAssert
+Oxbow.Testing.OxbowAssert.FindAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.Job<TArgs>!>!>!
+Oxbow.Testing.OxbowAssert.InsertedAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Job<TArgs>!>!
+Oxbow.Testing.OxbowAssert.NotInsertedAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Testing.OxbowAssert.OxbowAssert(string! schema = "public", string! tablePrefix = "oxbow_") -> void
+Oxbow.Testing.OxbowAssertionException
+Oxbow.Testing.OxbowAssertionException.OxbowAssertionException() -> void
+Oxbow.Testing.OxbowAssertionException.OxbowAssertionException(string! message, System.Exception! innerException) -> void
+Oxbow.Testing.OxbowAssertionException.OxbowAssertionException(string! message) -> void
+Oxbow.Testing.WorkerHarness<TArgs, TWorker>
+Oxbow.Testing.WorkerHarness<TArgs, TWorker>.WorkAsync(TArgs args, int attempt = 1, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Testing.WorkResult!>!
+Oxbow.Testing.WorkerHarness<TArgs, TWorker>.WorkerHarness(System.IServiceProvider! services) -> void
+Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkOutcome.Cancelled = 3 -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkOutcome.Completed = 0 -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkOutcome.Errored = 1 -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkOutcome.Snoozed = 2 -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkOutcome.TimedOut = 4 -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkResult
+Oxbow.Testing.WorkResult.<Clone>$() -> Oxbow.Testing.WorkResult!
+Oxbow.Testing.WorkResult.Deconstruct(out Oxbow.Testing.WorkOutcome Outcome, out System.Exception? Exception, out System.TimeSpan? SnoozeDuration) -> void
+Oxbow.Testing.WorkResult.Equals(Oxbow.Testing.WorkResult? other) -> bool
+Oxbow.Testing.WorkResult.Exception.get -> System.Exception?
+Oxbow.Testing.WorkResult.Exception.init -> void
+Oxbow.Testing.WorkResult.Outcome.get -> Oxbow.Testing.WorkOutcome
+Oxbow.Testing.WorkResult.Outcome.init -> void
+Oxbow.Testing.WorkResult.SnoozeDuration.get -> System.TimeSpan?
+Oxbow.Testing.WorkResult.SnoozeDuration.init -> void
+Oxbow.Testing.WorkResult.WorkResult(Oxbow.Testing.WorkOutcome Outcome, System.Exception? Exception, System.TimeSpan? SnoozeDuration) -> void
+static Oxbow.Testing.InsertedJobFilter<TArgs>.operator !=(Oxbow.Testing.InsertedJobFilter<TArgs>? left, Oxbow.Testing.InsertedJobFilter<TArgs>? right) -> bool
+static Oxbow.Testing.InsertedJobFilter<TArgs>.operator ==(Oxbow.Testing.InsertedJobFilter<TArgs>? left, Oxbow.Testing.InsertedJobFilter<TArgs>? right) -> bool
+static Oxbow.Testing.WorkResult.operator !=(Oxbow.Testing.WorkResult? left, Oxbow.Testing.WorkResult? right) -> bool
+static Oxbow.Testing.WorkResult.operator ==(Oxbow.Testing.WorkResult? left, Oxbow.Testing.WorkResult? right) -> bool

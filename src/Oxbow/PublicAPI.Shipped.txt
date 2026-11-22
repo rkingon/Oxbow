@@ -95,6 +95,8 @@ Oxbow.IOxbowClient.InsertAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsq
 Oxbow.IOxbowClient.InsertAsync<TArgs>(TArgs args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.InsertResult!>!
 Oxbow.IOxbowClient.InsertManyAsync(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
 Oxbow.IOxbowClient.InsertManyAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+Oxbow.IOxbowClient.InsertManyFastAsync(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+Oxbow.IOxbowClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
 Oxbow.IOxbowClient.ListAsync(Oxbow.JobListQuery! query, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobListResult!>!
 Oxbow.IOxbowClient.PauseQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Oxbow.IOxbowClient.ResumeQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
@@ -110,6 +112,7 @@ Oxbow.Job<TArgs>.Args.get -> TArgs
 Oxbow.Job<TArgs>.Attempt.get -> int
 Oxbow.Job<TArgs>.Errors.get -> System.Collections.Generic.IReadOnlyList<Oxbow.AttemptError!>!
 Oxbow.Job<TArgs>.Id.get -> long
+Oxbow.Job<TArgs>.Job(Oxbow.JobRow! row, TArgs args) -> void
 Oxbow.Job<TArgs>.Kind.get -> string!
 Oxbow.Job<TArgs>.MaxAttempts.get -> int
 Oxbow.Job<TArgs>.Metadata.get -> System.Text.Json.JsonElement
@@ -123,6 +126,7 @@ Oxbow.JobContext
 Oxbow.JobContext.Args.get -> Oxbow.IJobArgs!
 Oxbow.JobContext.CancellationToken.get -> System.Threading.CancellationToken
 Oxbow.JobContext.Job.get -> Oxbow.JobRow!
+Oxbow.JobContext.JobContext(Oxbow.JobRow! job, Oxbow.IJobArgs! args, System.IServiceProvider! services, System.Threading.CancellationToken cancellationToken) -> void
 Oxbow.JobContext.Services.get -> System.IServiceProvider!
 Oxbow.JobInsertContext
 Oxbow.JobInsertContext.CancellationToken.get -> System.Threading.CancellationToken
