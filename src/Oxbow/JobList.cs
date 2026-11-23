@@ -33,7 +33,7 @@ public record JobFilter
     public bool All { get; init; }
 }
 
-/// <summary>Filters and paging for <see cref="IOxbowClient.ListAsync"/>.</summary>
+/// <summary>Filters and paging for <see cref="IOxbowClient.ListAsync"/>. Bulk operations reject it; pass a <see cref="JobFilter"/>.</summary>
 public sealed record JobListQuery : JobFilter
 {
     /// <summary>The page size, 1 to 10,000. Default 100.</summary>
@@ -57,3 +57,10 @@ public sealed record JobListResult(IReadOnlyList<JobRow> Jobs, string? NextCurso
 /// Running jobs whose nodes were told to stop them. Each ends cancelled, or completed if its worker finishes anyway.
 /// </param>
 public sealed record CancelManyResult(long Cancelled, long CancelRequested);
+
+/// <summary>The outcome of <see cref="IOxbowClient.RetryManyAsync"/>.</summary>
+/// <param name="Retried">Jobs made available to run now.</param>
+/// <param name="SkippedUniqueConflicts">
+/// Jobs left as they were because retrying them would take a unique key another live job holds.
+/// </param>
+public sealed record RetryManyResult(long Retried, long SkippedUniqueConflicts);

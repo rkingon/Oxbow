@@ -15,7 +15,6 @@ Oxbow.CancelManyResult.Deconstruct(out long Cancelled, out long CancelRequested)
 Oxbow.CancelManyResult.Equals(Oxbow.CancelManyResult? other) -> bool
 Oxbow.IOxbowClient.CancelManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.CancelManyResult!>!
 Oxbow.IOxbowClient.DeleteManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
-Oxbow.IOxbowClient.RetryManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 Oxbow.JobFilter
 Oxbow.JobFilter.All.get -> bool
 Oxbow.JobFilter.All.init -> void
@@ -54,3 +53,18 @@ virtual Oxbow.JobFilter.PrintMembers(System.Text.StringBuilder! builder) -> bool
 *REMOVED*Oxbow.JobListQuery.Queues.init -> void
 *REMOVED*Oxbow.JobListQuery.States.get -> System.Collections.Generic.IReadOnlyList<Oxbow.JobState>?
 *REMOVED*Oxbow.JobListQuery.States.init -> void
+Oxbow.IOxbowClient.RetryManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.RetryManyResult!>!
+Oxbow.RetryManyResult
+Oxbow.RetryManyResult.<Clone>$() -> Oxbow.RetryManyResult!
+Oxbow.RetryManyResult.Deconstruct(out long Retried, out long SkippedUniqueConflicts) -> void
+Oxbow.RetryManyResult.Equals(Oxbow.RetryManyResult? other) -> bool
+Oxbow.RetryManyResult.Retried.get -> long
+Oxbow.RetryManyResult.Retried.init -> void
+Oxbow.RetryManyResult.RetryManyResult(long Retried, long SkippedUniqueConflicts) -> void
+Oxbow.RetryManyResult.SkippedUniqueConflicts.get -> long
+Oxbow.RetryManyResult.SkippedUniqueConflicts.init -> void
+override Oxbow.RetryManyResult.Equals(object? obj) -> bool
+override Oxbow.RetryManyResult.GetHashCode() -> int
+override Oxbow.RetryManyResult.ToString() -> string!
+static Oxbow.RetryManyResult.operator !=(Oxbow.RetryManyResult? left, Oxbow.RetryManyResult? right) -> bool
+static Oxbow.RetryManyResult.operator ==(Oxbow.RetryManyResult? left, Oxbow.RetryManyResult? right) -> bool

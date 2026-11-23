@@ -8,7 +8,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `CancelManyAsync`, `RetryManyAsync` and `DeleteManyAsync` on `IOxbowClient`: the single-job semantics applied to every
-  job matching a filter, in batches. Bulk cancel stops running jobs on every node with batched control NOTIFYs; nodes on
+  job matching a `JobFilter`, in batches. Bulk retry skips jobs whose unique key another live job holds and reports
+  them in `RetryManyResult`. Bulk cancel stops running jobs on every node with batched control NOTIFYs; nodes on
   0.1.0-alpha.3 pick those up at their cancel poll instead.
 - `JobFilter`, now the base of `JobListQuery`, with `Metadata` (JSON containment) and `Tags` (all of) filters for
   `ListAsync` and the bulk operations.

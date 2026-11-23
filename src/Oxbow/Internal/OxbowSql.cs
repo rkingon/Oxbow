@@ -223,7 +223,7 @@ internal sealed class OxbowSql
             """;
 
         // The bulk operations run one batch per statement, walking IDs upward from @after, and each returns
-        // (scanned, last_id, affected, cancel_requested). Rows are locked in ID order and waited for rather than skipped,
+        // (scanned, last_id, affected, and cancel requests or unique conflicts skipped). Rows are locked in ID order and waited for rather than skipped,
         // so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
         CancelManyTemplate = $"""
             WITH locked AS (
@@ -317,7 +317,7 @@ internal sealed class OxbowSql
                 (SELECT count(*) FROM locked),
                 (SELECT max(id) FROM locked),
                 (SELECT count(*) FROM updated),
-                0::bigint
+                (SELECT count(*) FROM conflicts)
             """;
 
         DeleteManyTemplate = $"""

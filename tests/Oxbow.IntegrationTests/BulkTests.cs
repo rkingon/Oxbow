@@ -107,7 +107,7 @@ public sealed class BulkTests(PostgresFixture database)
 
         var retried = await app.Client.RetryManyAsync(new JobFilter { Tags = ["batch"] });
 
-        Assert.Equal(3, retried);
+        Assert.Equal(new RetryManyResult(Retried: 3, SkippedUniqueConflicts: 0), retried);
         var job = await app.Client.GetAsync(discarded);
         Assert.Equal(JobState.Available, job!.State);
         Assert.Equal(4, job.MaxAttempts);
@@ -137,13 +137,13 @@ public sealed class BulkTests(PostgresFixture database)
         await SetStateAsync(prefix, third, "discarded", "finalized_at = now()");
         var live = (await app.Client.InsertAsync(new UniqueArgs("c2", "t"), new InsertOptions { Queue = "idle" })).Job.Id;
 
-        Assert.Equal(1, await app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] }));
+        Assert.Equal(new RetryManyResult(1, 2), await app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] }));
 
         Assert.Equal(JobState.Available, (await app.Client.GetAsync(first))!.State);
         Assert.Equal(JobState.Discarded, (await app.Client.GetAsync(second))!.State);
         Assert.Equal(JobState.Discarded, (await app.Client.GetAsync(third))!.State);
         Assert.Equal(JobState.Available, (await app.Client.GetAsync(live))!.State);
-        Assert.Equal(0, await app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] }));
+        Assert.Equal(new RetryManyResult(0, 2), await app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] }));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public sealed class BulkTests(PostgresFixture database)
         Assert.Equal(3_000, await CountAsync(prefix, "state = 'cancelled' AND metadata @> '{\"tenant\": \"acme\"}'"));
         Assert.Equal(500, await CountAsync(prefix, "state = 'available' AND metadata @> '{\"tenant\": \"other\"}'"));
 
-        Assert.Equal(3_000, await app.Client.RetryManyAsync(acme));
+        Assert.Equal(new RetryManyResult(3_000, 0), await app.Client.RetryManyAsync(acme));
         Assert.Equal(3_500, await CountAsync(prefix, "state = 'available'"));
 
         Assert.Equal(3_000, await app.Client.DeleteManyAsync(acme));
@@ -245,7 +245,7 @@ public sealed class BulkTests(PostgresFixture database)
         await using var app = await TestApp.StartAsync(database, prefix);
         await app.Client.InsertAsync(new RecordArgs("a"), Idle("acme"));
 
-        JobFilter[] everything = [new JobFilter(), new JobListQuery(), new JobFilter { Metadata = new JsonObject(), Tags = [] }];
+        JobFilter[] everything = [new JobFilter(), new JobFilter { Metadata = new JsonObject(), Tags = [] }];
         foreach (var filter in everything)
         {
             await Assert.ThrowsAsync<ArgumentException>(() => app.Client.CancelManyAsync(filter));
@@ -258,6 +258,24 @@ public sealed class BulkTests(PostgresFixture database)
 
         Assert.Equal(1, await app.Client.DeleteManyAsync(new JobFilter { All = true }));
         Assert.Equal(0, await CountAsync(prefix, "TRUE"));
+    }
+
+    [Fact]
+    public async Task Bulk_operations_reject_a_list_query_because_they_ignore_its_page()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        await app.Client.InsertAsync(new RecordArgs("a"), Idle("acme"));
+        await app.Client.InsertAsync(new RecordArgs("b"), Idle("acme"));
+
+        var page = new JobListQuery { Metadata = new JsonObject { ["tenant"] = "acme" }, Limit = 1 };
+        Assert.Single((await app.Client.ListAsync(page)).Jobs);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => app.Client.DeleteManyAsync(page));
+        Assert.Contains("JobFilter", ex.Message, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<ArgumentException>(() => app.Client.CancelManyAsync(page));
+        await Assert.ThrowsAsync<ArgumentException>(() => app.Client.RetryManyAsync(page with { All = true }));
+        Assert.Equal(2, await CountAsync(prefix, "TRUE"));
     }
 
     private static long[] Ids(JobListResult page) => page.Jobs.Select(j => j.Id).ToArray();

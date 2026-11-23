@@ -102,8 +102,8 @@ public interface IOxbowClient
     /// it again is safe. Jobs inserted while it runs may or may not be included.
     /// </summary>
     /// <param name="filter">
-    /// The jobs to cancel. A filter that matches everything is rejected unless <see cref="JobFilter.All"/> is set. A
-    /// <see cref="JobListQuery"/>'s paging is ignored: every matching job is cancelled.
+    /// The jobs to cancel. A filter that matches everything is rejected unless <see cref="JobFilter.All"/> is set, and so
+    /// is a <see cref="JobListQuery"/>, whose paging would suggest only one page is affected.
     /// </param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>How many jobs were cancelled, and how many running ones were asked to stop.</returns>
@@ -111,13 +111,13 @@ public interface IOxbowClient
 
     /// <summary>
     /// Makes every matching job available to run now, as <see cref="RetryAsync"/> would one at a time, in batches like
-    /// <see cref="CancelManyAsync"/>. A job whose unique key another live job holds is skipped, where
+    /// <see cref="CancelManyAsync"/>. A job that would take a unique key another live job holds is skipped, where
     /// <see cref="RetryAsync"/> would throw.
     /// </summary>
     /// <param name="filter">The jobs to retry; see <see cref="CancelManyAsync"/>.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>How many jobs were made available.</returns>
-    Task<long> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
+    /// <returns>How many jobs were made available, and how many were skipped for their unique key.</returns>
+    Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes every matching job that isn't running, in batches like <see cref="CancelManyAsync"/>.</summary>
     /// <param name="filter">The jobs to delete; see <see cref="CancelManyAsync"/>.</param>

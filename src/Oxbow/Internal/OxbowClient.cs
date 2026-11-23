@@ -245,37 +245,47 @@ internal sealed partial class OxbowClient(
         return new CancelManyResult(cancelled, requested);
     }
 
-    public async Task<long> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
-        (await ManyAsync(runtime.Sql.RetryManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
+    public async Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (retried, skipped) = await ManyAsync(runtime.Sql.RetryManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new RetryManyResult(retried, skipped);
+    }
 
     public async Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
         (await ManyAsync(runtime.Sql.DeleteManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
 
-    private async Task<(long Affected, long CancelRequested)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
+    private async Task<(long Affected, long Other)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
     {
         JobFilterSql.Validate(filter, nameof(filter));
+        if (filter is JobListQuery)
+        {
+            throw new ArgumentException(
+                "Bulk operations act on every matching job, not a page, so they don't take a JobListQuery. Pass a JobFilter.",
+                nameof(filter));
+        }
+
         if (!filter.All && JobFilterSql.MatchesEverything(filter))
         {
             throw new ArgumentException(
                 "The filter matches every job. Set a filter, or set JobFilter.All to act on every job.", nameof(filter));
         }
 
-        long after = 0, affected = 0, requested = 0;
+        long after = 0, affected = 0, other = 0;
         while (true)
         {
             var batch = await ManyBatchAsync(template, filter, after, cancellationToken).ConfigureAwait(false);
             affected += batch.Affected;
-            requested += batch.CancelRequested;
+            other += batch.Other;
             if (batch.Scanned < BulkBatchSize)
             {
-                return (affected, requested);
+                return (affected, other);
             }
 
             after = batch.LastId;
         }
     }
 
-    private async Task<(long Scanned, long LastId, long Affected, long CancelRequested)> ManyBatchAsync(
+    private async Task<(long Scanned, long LastId, long Affected, long Other)> ManyBatchAsync(
         string template,
         JobFilter filter,
         long after,
