@@ -225,8 +225,18 @@ internal sealed class OxbowHostedService(
 
         switch (control.Action)
         {
-            case "cancel" when control.JobId is { } jobId && _producers.TryGetValue(queue, out var producer):
-                producer.CancelJob(jobId);
+            // CancelAsync sends job_id; CancelManyAsync sends job_ids, which alpha.3 nodes ignore and pick up by polling.
+            case "cancel" when _producers.TryGetValue(queue, out var producer):
+                if (control.JobId is { } jobId)
+                {
+                    producer.CancelJob(jobId);
+                }
+
+                foreach (var id in control.JobIds ?? [])
+                {
+                    producer.CancelJob(id);
+                }
+
                 break;
             case "pause" or "resume":
                 foreach (var target in _producers.Values.Where(p => queue == "*" || p.Queue == queue))

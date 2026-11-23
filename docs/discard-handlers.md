@@ -28,8 +28,9 @@ services.AddOxbow(...).AddDiscardHandler<AlertOnDiscard>();
 - `context.Job` is read after the write, with the error history, metadata and `finalized_at` as stored. `Exception`
   is the worker's exception when the outcome came from this node's worker, and `null` otherwise.
 - **Processor outcomes only.** Handlers see what the processor decided: the executor, the rescuer and the scheduler.
-  Changes made directly through the client, such as `CancelAsync` on a job that isn't running (cancelled on the spot,
-  row returned to the caller), never call handlers.
+  Changes made directly through the client, such as `CancelAsync` or `CancelManyAsync` on jobs that aren't running
+  (cancelled on the spot, reported to the caller), never call handlers. A running job they cancel is stopped by its
+  worker's node, and that outcome does call them.
 - Each job gets a new DI scope. Handlers run in registration order; an exception is logged and the next handler still
   runs.
 - Handlers run on one background loop, never on a worker slot or a maintenance loop, so a slow handler delays other
