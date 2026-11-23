@@ -55,3 +55,18 @@ public sealed class UnknownJobKindException : Exception
     /// <summary>The unknown kind.</summary>
     public string Kind { get; }
 }
+
+/// <summary>A periodic job with the name already exists, created at runtime or registered in code.</summary>
+public sealed class PeriodicJobExistsException : Exception
+{
+    /// <summary>Creates the exception for <paramref name="name"/>.</summary>
+    /// <param name="name">The periodic job's name.</param>
+    public PeriodicJobExistsException(string name)
+        : base($"A periodic job named '{name}' already exists. Replace it with UpsertPeriodicJobAsync, or choose another name.")
+    {
+        Name = name;
+    }
+
+    /// <summary>The periodic job's name.</summary>
+    public string Name { get; }
+}

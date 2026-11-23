@@ -421,6 +421,13 @@ internal sealed class OxbowSql
             RETURNING {PeriodicColumns("p")}
             """;
 
+        PeriodicJobCreate = $"""
+            INSERT INTO {periodic} AS p (name, kind, args, options, cron, time_zone, every, next_run_at)
+            VALUES (@name, @kind, @args::jsonb, @options::jsonb, @cron, @time_zone, {everyParam}, @next_run_at)
+            ON CONFLICT (name) DO NOTHING
+            RETURNING {PeriodicColumns("p")}
+            """;
+
         PeriodicJobPause = $"""
             UPDATE {periodic} AS p
             SET paused_at = coalesce(p.paused_at, now()), updated_at = now()
@@ -441,7 +448,13 @@ internal sealed class OxbowSql
 
         PeriodicJobGet = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} WHERE name = @name";
 
-        PeriodicJobList = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} ORDER BY name";
+        PeriodicJobList = $"""
+            SELECT {PeriodicColumns(prefix + "periodic_job")}
+            FROM {periodic}
+            WHERE @after::text IS NULL OR name > @after
+            ORDER BY name
+            LIMIT @limit
+            """;
 
         // The leader's sync of the jobs registered in its code: create missing rows, take up schedule changes, and
         // refresh the rest hourly so rows for jobs no longer in any leader's code can be told apart and deleted.
@@ -567,6 +580,8 @@ internal sealed class OxbowSql
     public string QueueDeleteExpired { get; }
 
     public string PeriodicJobUpsert { get; }
+
+    public string PeriodicJobCreate { get; }
 
     public string PeriodicJobPause { get; }
 

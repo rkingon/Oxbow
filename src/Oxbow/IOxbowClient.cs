@@ -122,6 +122,44 @@ public interface IOxbowClient
     Task ResumeQueueAsync(string queue, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates a periodic job stored in the database, which the leader enqueues without a restart. Fails if the name is
+    /// taken, so an admin tool can't overwrite a job by accident.
+    /// </summary>
+    /// <param name="name">A unique name, 1 to 255 characters.</param>
+    /// <param name="schedule">When it runs. A cron time zone must be one the system can find by ID.</param>
+    /// <param name="args">The args each run is inserted with.</param>
+    /// <param name="options">The insert options each run is inserted with. <see cref="InsertOptions.ScheduledAt"/> isn't allowed.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The stored periodic job.</returns>
+    /// <exception cref="PeriodicJobExistsException">A periodic job with the name exists.</exception>
+    Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        IJobArgs args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates a periodic job from a kind and args JSON, for callers without the args type, such as admin tools.
+    /// Otherwise the same as <see cref="CreatePeriodicJobAsync(string, PeriodicSchedule, IJobArgs, InsertOptions?, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="name">A unique name, 1 to 255 characters.</param>
+    /// <param name="schedule">When it runs. A cron time zone must be one the system can find by ID.</param>
+    /// <param name="kind">The job kind.</param>
+    /// <param name="args">The args each run is inserted with.</param>
+    /// <param name="options">The insert options each run is inserted with. <see cref="InsertOptions.ScheduledAt"/> isn't allowed.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The stored periodic job.</returns>
+    /// <exception cref="PeriodicJobExistsException">A periodic job with the name exists.</exception>
+    Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        JsonElement args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates or replaces a periodic job stored in the database, which the leader enqueues without a restart. Replacing
     /// keeps its run history and pause; a changed schedule starts again from its next occurrence.
     /// </summary>
@@ -187,8 +225,9 @@ public interface IOxbowClient
     /// <returns>The job, or <see langword="null"/> if it doesn't exist.</returns>
     Task<PeriodicJobRow?> GetPeriodicJobAsync(string name, CancellationToken cancellationToken = default);
 
-    /// <summary>Lists every periodic job, stored or registered in code, by name.</summary>
+    /// <summary>Lists periodic jobs, stored or registered in code, ordered by name, one page at a time.</summary>
+    /// <param name="query">Paging.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The jobs.</returns>
-    Task<IReadOnlyList<PeriodicJobRow>> ListPeriodicJobsAsync(CancellationToken cancellationToken = default);
+    /// <returns>A page of jobs and the cursor for the next one.</returns>
+    Task<PeriodicJobListResult> ListPeriodicJobsAsync(PeriodicJobListQuery query, CancellationToken cancellationToken = default);
 }

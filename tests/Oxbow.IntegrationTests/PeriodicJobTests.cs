@@ -29,7 +29,8 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         Assert.Equal(2, created.Options.Priority);
         Assert.Equal(["nightly"], created.Options.Tags!);
         Assert.Equal("ops", created.Options.Metadata!["team"]!.GetValue<string>());
-        Assert.Equal(TimeSpan.FromHours(1), created.Schedule.Interval);
+        Assert.Equal(TimeSpan.FromHours(1), created.Interval);
+        Assert.Null(created.CronExpression);
         Assert.False(created.RegisteredInCode);
         Assert.Null(created.PausedAt);
         Assert.Null(created.LastRunAt);
@@ -48,7 +49,7 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         Assert.InRange(rescheduled.NextRunAt!.Value, DateTimeOffset.UtcNow.AddMinutes(4), DateTimeOffset.UtcNow.AddMinutes(6));
 
         await client.UpsertPeriodicJobAsync("another", PeriodicSchedule.Cron("0 3 * * *"), new RecordArgs("d"));
-        Assert.Equal(["another", "report"], (await client.ListPeriodicJobsAsync()).Select(j => j.Name));
+        Assert.Equal(["another", "report"], (await client.ListPeriodicJobsAsync(new())).Jobs.Select(j => j.Name));
         Assert.Equal("c", (await client.GetPeriodicJobAsync("report"))!.Args!.Value.GetProperty("value").GetString());
 
         Assert.NotNull(await client.DeletePeriodicJobAsync("report"));
@@ -56,6 +57,57 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         Assert.Null(await client.DeletePeriodicJobAsync("report"));
         Assert.Null(await client.PausePeriodicJobAsync("report"));
         Assert.Null(await client.ResumePeriodicJobAsync("report"));
+    }
+
+    [Fact]
+    public async Task Create_fails_when_the_name_is_taken()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, o =>
+        {
+            Queues(o);
+            o.AddPeriodicJob("in-code", PeriodicSchedule.Every(TimeSpan.FromHours(1)), () => new RecordArgs("code"));
+        }, Workers);
+        var hourly = PeriodicSchedule.Every(TimeSpan.FromHours(1));
+
+        var created = await app.Client.CreatePeriodicJobAsync("report", hourly, new RecordArgs("a"));
+        var ex = await Assert.ThrowsAsync<PeriodicJobExistsException>(() =>
+            app.Client.CreatePeriodicJobAsync("report", PeriodicSchedule.Every(TimeSpan.FromMinutes(1)), "record", JsonDocument.Parse("""{"value":"b"}""").RootElement));
+        Assert.Equal("report", ex.Name);
+        var unchanged = (await app.Client.GetPeriodicJobAsync("report"))!;
+        Assert.Equal("a", unchanged.Args!.Value.GetProperty("value").GetString());
+        Assert.Equal(created.NextRunAt, unchanged.NextRunAt);
+
+        await WaitUntilAsync(async () => await app.Client.GetPeriodicJobAsync("in-code") is not null);
+        await Assert.ThrowsAsync<PeriodicJobExistsException>(() => app.Client.CreatePeriodicJobAsync("in-code", hourly, new RecordArgs("a")));
+    }
+
+    [Fact]
+    public async Task Listing_pages_by_name()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, register: Workers, start: false);
+        var names = Enumerable.Range(0, 7).Select(i => $"tenant-{i:D2}").ToList();
+        foreach (var name in names.AsEnumerable().Reverse())
+        {
+            await app.Client.CreatePeriodicJobAsync(name, PeriodicSchedule.Every(TimeSpan.FromHours(1)), new RecordArgs(name));
+        }
+
+        var seen = new List<string>();
+        string? cursor = null;
+        var pages = 0;
+        do
+        {
+            var page = await app.Client.ListPeriodicJobsAsync(new PeriodicJobListQuery { Limit = 3, Cursor = cursor });
+            seen.AddRange(page.Jobs.Select(j => j.Name));
+            cursor = page.NextCursor;
+            pages++;
+        }
+        while (cursor is not null);
+
+        Assert.Equal(names, seen);
+        Assert.Equal(3, pages);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => app.Client.ListPeriodicJobsAsync(new PeriodicJobListQuery { Limit = 0 }));
     }
 
     [Fact]
@@ -81,7 +133,7 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         await Assert.ThrowsAsync<ArgumentException>(() =>
             client.UpsertPeriodicJobAsync("x", PeriodicSchedule.Cron("0 3 * * *", custom), new RecordArgs("a")));
 
-        Assert.Empty(await client.ListPeriodicJobsAsync());
+        Assert.Empty((await client.ListPeriodicJobsAsync(new())).Jobs);
     }
 
     [Fact]
@@ -93,8 +145,9 @@ public sealed class PeriodicJobTests(PostgresFixture database)
 
         var row = await app.Client.UpsertPeriodicJobAsync("nightly", PeriodicSchedule.Cron("0 3 * * *", london), new RecordArgs("a"));
 
-        Assert.Equal("0 3 * * *", row.Schedule.Expression);
-        Assert.Equal("Europe/London", row.Schedule.TimeZone!.Id);
+        Assert.Equal("0 3 * * *", row.CronExpression);
+        Assert.Equal("Europe/London", row.TimeZoneId);
+        Assert.Null(row.Interval);
         var local = TimeZoneInfo.ConvertTime(row.NextRunAt!.Value, london);
         Assert.Equal((3, 0, 0), (local.Hour, local.Minute, local.Second));
         Assert.InRange(row.NextRunAt.Value, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
@@ -272,6 +325,11 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         await WaitUntilAsync(async () =>
             await database.ScalarAsOwnerAsync<bool>($"SELECT next_run_at IS NULL FROM public.{prefix}periodic_job WHERE name = 'broken'"));
         Assert.Empty(await RunsAsync(app, "broken"));
+
+        // Reads don't parse the schedule, so the row still lists.
+        var listed = Assert.Single((await app.Client.ListPeriodicJobsAsync(new())).Jobs);
+        Assert.Equal("not a cron", listed.CronExpression);
+        Assert.Equal("UTC", listed.TimeZoneId);
     }
 
     private static Elector ElectorOf(TestApp app) =>

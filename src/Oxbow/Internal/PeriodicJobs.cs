@@ -37,19 +37,16 @@ internal static class PeriodicJobRowReader
         RegisteredInCode = reader.GetBoolean(1),
         Kind = reader.IsDBNull(2) ? null : reader.GetString(2),
         Args = reader.IsDBNull(3) ? null : ParseJson(reader.GetString(3)),
-        Options = reader.IsDBNull(4) ? null : JsonSerializer.Deserialize(reader.GetString(4), PeriodicJsonContext.Default.InsertOptions),
-        Schedule = ReadSchedule(reader),
+        Options = reader.IsDBNull(4) ? null : ReadOptions(reader.GetString(4)),
+        CronExpression = reader.IsDBNull(5) ? null : reader.GetString(5),
+        TimeZoneId = reader.IsDBNull(6) ? null : reader.GetString(6),
+        Interval = reader.IsDBNull(7) ? null : TimeSpan.FromSeconds(reader.GetDouble(7)),
         PausedAt = reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
         NextRunAt = reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9),
         LastRunAt = reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10),
         CreatedAt = reader.GetFieldValue<DateTimeOffset>(11),
         UpdatedAt = reader.GetFieldValue<DateTimeOffset>(12),
     };
-
-    public static PeriodicSchedule ReadSchedule(NpgsqlDataReader reader) => PeriodicSchedule.FromStored(
-        reader.IsDBNull(5) ? null : reader.GetString(5),
-        reader.IsDBNull(6) ? null : reader.GetString(6),
-        reader.IsDBNull(7) ? null : reader.GetDouble(7));
 
     public static async Task<List<PeriodicJobRow>> ReadAllAsync(NpgsqlCommand command, CancellationToken cancellationToken)
     {
@@ -64,6 +61,19 @@ internal static class PeriodicJobRowReader
         }
 
         return rows;
+    }
+
+    // One row this version can't read mustn't break listing the rest.
+    private static InsertOptions? ReadOptions(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(json, PeriodicJsonContext.Default.InsertOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static JsonElement ParseJson(string json)

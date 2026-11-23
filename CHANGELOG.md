@@ -9,8 +9,9 @@ All notable changes to this project are documented here. The format follows
 
 - Durable periodic jobs. Run times of every periodic job are persisted in `{prefix}periodic_job` (schema version 2), so
   a leader failover or restart neither skips nor repeats a run, and missed runs catch up once. Periodic jobs can be
-  stored and managed at runtime: `IOxbowClient.UpsertPeriodicJobAsync`, `PausePeriodicJobAsync`,
-  `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and `ListPeriodicJobsAsync`.
+  stored and managed at runtime: `IOxbowClient.CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`,
+  `PausePeriodicJobAsync`, `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and
+  `ListPeriodicJobsAsync` (paged).
   `AddPeriodicJob(name, …)` names a code-registered job; unnamed ones get a name derived from kind and schedule.
   `PeriodicSchedule` exposes `Expression`, `TimeZone` and `Interval`.
 

@@ -208,6 +208,26 @@ internal sealed partial class OxbowClient(
         return job;
     }
 
+    public Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        IJobArgs args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (kind, json) = SerializePeriodicArgs(args);
+        return StorePeriodicJobAsync(replace: false, name, schedule, kind, json, options, cancellationToken);
+    }
+
+    public Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        JsonElement args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        StorePeriodicJobAsync(replace: false, name, schedule, kind, RawPeriodicArgs(kind, args), options, cancellationToken);
+
     public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
         string name,
         PeriodicSchedule schedule,
@@ -215,10 +235,8 @@ internal sealed partial class OxbowClient(
         InsertOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(args);
-        var argsType = args.GetType();
-        var json = JsonSerializer.Serialize(args, runtime.Json.GetTypeInfo(argsType));
-        return UpsertPeriodicJobCoreAsync(name, schedule, JobKinds.Get(argsType).Kind, json, options, cancellationToken);
+        var (kind, json) = SerializePeriodicArgs(args);
+        return StorePeriodicJobAsync(replace: true, name, schedule, kind, json, options, cancellationToken);
     }
 
     public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
@@ -227,7 +245,17 @@ internal sealed partial class OxbowClient(
         string kind,
         JsonElement args,
         InsertOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        StorePeriodicJobAsync(replace: true, name, schedule, kind, RawPeriodicArgs(kind, args), options, cancellationToken);
+
+    private (string Kind, string Json) SerializePeriodicArgs(IJobArgs args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var argsType = args.GetType();
+        return (JobKinds.Get(argsType).Kind, JsonSerializer.Serialize(args, runtime.Json.GetTypeInfo(argsType)));
+    }
+
+    private static string RawPeriodicArgs(string kind, JsonElement args)
     {
         if (string.IsNullOrWhiteSpace(kind) || kind.Length >= 128)
         {
@@ -239,10 +267,11 @@ internal sealed partial class OxbowClient(
             throw new ArgumentException("Args must be a JSON value.", nameof(args));
         }
 
-        return UpsertPeriodicJobCoreAsync(name, schedule, kind, args.GetRawText(), options, cancellationToken);
+        return args.GetRawText();
     }
 
-    private async Task<PeriodicJobRow> UpsertPeriodicJobCoreAsync(
+    private async Task<PeriodicJobRow> StorePeriodicJobAsync(
+        bool replace,
         string name,
         PeriodicSchedule schedule,
         string kind,
@@ -274,7 +303,7 @@ internal sealed partial class OxbowClient(
             throw new ArgumentException($"The args don't deserialize to the args type of kind '{kind}': {ex.Message}", ex);
         }
 
-        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobUpsert);
+        var command = runtime.DataSource.CreateCommand(replace ? runtime.Sql.PeriodicJobUpsert : runtime.Sql.PeriodicJobCreate);
         PeriodicJobRow? row;
         await using (command.ConfigureAwait(false))
         {
@@ -292,8 +321,10 @@ internal sealed partial class OxbowClient(
 
         if (row is null)
         {
-            throw new InvalidOperationException(
-                $"Periodic job '{name}' is registered in code, so it can't be replaced at runtime. Choose another name.");
+            throw replace
+                ? new InvalidOperationException(
+                    $"Periodic job '{name}' is registered in code, so it can't be replaced at runtime. Choose another name.")
+                : new PeriodicJobExistsException(name);
         }
 
         await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
@@ -330,7 +361,7 @@ internal sealed partial class OxbowClient(
                 await using (update.ConfigureAwait(false))
                 {
                     update.Parameters.AddWithValue("name", name);
-                    update.Parameters.Add(Timestamp("next_run_at", row.Schedule.GetNextOccurrence(timeProvider.GetUtcNow())));
+                    update.Parameters.Add(Timestamp("next_run_at", ParseSchedule(row).GetNextOccurrence(timeProvider.GetUtcNow())));
                     row = (await PeriodicJobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))[0];
                 }
 
@@ -357,12 +388,30 @@ internal sealed partial class OxbowClient(
         }
     }
 
-    public async Task<IReadOnlyList<PeriodicJobRow>> ListPeriodicJobsAsync(CancellationToken cancellationToken = default)
+    public async Task<PeriodicJobListResult> ListPeriodicJobsAsync(PeriodicJobListQuery query, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(query.Limit, 10_000);
         var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobList);
         await using (command.ConfigureAwait(false))
         {
-            return await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            command.Parameters.Add(Text("after", query.Cursor));
+            command.Parameters.AddWithValue("limit", query.Limit);
+            var jobs = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            return new PeriodicJobListResult(jobs, jobs.Count == query.Limit ? jobs[^1].Name : null);
+        }
+    }
+
+    private static PeriodicSchedule ParseSchedule(PeriodicJobRow row)
+    {
+        try
+        {
+            return PeriodicSchedule.FromStored(row.CronExpression, row.TimeZoneId, row.Interval?.TotalSeconds);
+        }
+        catch (Exception ex) when (ex is Cronos.CronFormatException or TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException)
+        {
+            throw new InvalidOperationException($"Periodic job '{row.Name}' has a schedule this node can't read: {ex.Message}", ex);
         }
     }
 

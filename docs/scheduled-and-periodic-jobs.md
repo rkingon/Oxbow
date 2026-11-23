@@ -48,12 +48,15 @@ await oxbow.UpsertPeriodicJobAsync("invoice-acme", PeriodicSchedule.Cron("0 9 1 
 await oxbow.PausePeriodicJobAsync("invoice-acme");
 await oxbow.ResumePeriodicJobAsync("invoice-acme");
 await oxbow.DeletePeriodicJobAsync("invoice-acme");
-var all = await oxbow.ListPeriodicJobsAsync();
+var page = await oxbow.ListPeriodicJobsAsync(new PeriodicJobListQuery { Limit = 100, Cursor = previous?.NextCursor });
 ```
 
+- Listing is paged by name, like `ListAsync`. Rows expose the schedule as stored (`CronExpression`, `TimeZoneId`,
+  `Interval`) without parsing it, so reading never depends on the reader's time zone database.
 - Stored as kind, args JSON and insert options. An overload takes a kind and a `JsonElement`, for admin tools that
   don't have the args type.
-- `UpsertPeriodicJobAsync` creates or replaces. Replacing keeps the run history and any pause. A changed schedule
+- `CreatePeriodicJobAsync` fails with `PeriodicJobExistsException` if the name is taken, so an admin tool can't
+  overwrite a job by accident. `UpsertPeriodicJobAsync` creates or replaces. Replacing keeps the run history and any pause. A changed schedule
   restarts from its next occurrence, and an unchanged one keeps its next run.
 - Validated when stored: the schedule, a time zone that can be found by ID on the leader (`FindSystemTimeZoneById`), the
   options as an insert would check them, and the args against their type when this node has a worker for the kind.

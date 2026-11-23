@@ -135,7 +135,7 @@ builder.Services.AddOxbow(o =>
 
 Only the elected leader enqueues them. Run times are persisted, so a failover neither skips nor repeats a run. Name a job
 (`o.AddPeriodicJob("nightly-report", …)`) to keep its history when its schedule changes. Periodic jobs can also be
-stored and managed at runtime with `UpsertPeriodicJobAsync`, `PausePeriodicJobAsync`, `ResumePeriodicJobAsync` and
+stored and managed at runtime with `CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`, `PausePeriodicJobAsync`, `ResumePeriodicJobAsync` and
 `DeletePeriodicJobAsync`. See [periodic jobs](docs/scheduled-and-periodic-jobs.md#periodic).
 
 ## Least privilege
