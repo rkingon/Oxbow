@@ -13,6 +13,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Scheduled and periodic (interval or cron) jobs
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
+- Heartbeat and progress for long-running jobs
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner
 - Insert and work middleware, OpenTelemetry-ready `ActivitySource` and `Meter`
 - **You own the migrations**, and the runtime works as a least-privilege role
