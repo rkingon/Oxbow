@@ -176,3 +176,22 @@ override Oxbow.RetryManyResult.GetHashCode() -> int
 override Oxbow.RetryManyResult.ToString() -> string!
 static Oxbow.RetryManyResult.operator !=(Oxbow.RetryManyResult? left, Oxbow.RetryManyResult? right) -> bool
 static Oxbow.RetryManyResult.operator ==(Oxbow.RetryManyResult? left, Oxbow.RetryManyResult? right) -> bool
+const Oxbow.JobRow.MaxOutputSize = 1048576 -> int
+Oxbow.IJobDiscardHandler
+Oxbow.IJobDiscardHandler.HandleAsync(Oxbow.JobDiscardContext! context, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.Job<TArgs>.Output.get -> object?
+Oxbow.Job<TArgs>.SetOutput(object! output) -> void
+Oxbow.JobDiscardContext
+Oxbow.JobDiscardContext.Exception.get -> System.Exception?
+Oxbow.JobDiscardContext.Job.get -> Oxbow.JobRow!
+Oxbow.JobDiscardContext.JobDiscardContext(Oxbow.JobRow! job, Oxbow.JobState state, Oxbow.JobDiscardReason reason, System.Exception? exception = null) -> void
+Oxbow.JobDiscardContext.Reason.get -> Oxbow.JobDiscardReason
+Oxbow.JobDiscardContext.State.get -> Oxbow.JobState
+Oxbow.JobDiscardReason
+Oxbow.JobDiscardReason.AttemptsExhausted = 0 -> Oxbow.JobDiscardReason
+Oxbow.JobDiscardReason.CancelRequested = 2 -> Oxbow.JobDiscardReason
+Oxbow.JobDiscardReason.UniqueKeyConflict = 3 -> Oxbow.JobDiscardReason
+Oxbow.JobDiscardReason.WorkerCancelled = 1 -> Oxbow.JobDiscardReason
+Oxbow.JobRow.GetOutput<T>(System.Text.Json.JsonSerializerOptions? options = null) -> T?
+Oxbow.JobRow.Output.get -> System.Text.Json.JsonElement?
+static Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions.AddDiscardHandler<THandler>(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!

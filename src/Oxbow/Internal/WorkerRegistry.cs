@@ -38,6 +38,7 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
 
         public override void Attach(JobControl control) => job.Control = control;
+        public override object? Output => job.Output;
     }
 }
 
@@ -52,6 +53,7 @@ internal abstract class WorkUnit
     public abstract Task WorkAsync(CancellationToken cancellationToken);
 
     public abstract void Attach(JobControl control);
+    public abstract object? Output { get; }
 }
 
 /// <summary>Every registered worker by kind and alias, validated when first resolved (at host start).</summary>

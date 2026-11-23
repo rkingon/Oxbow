@@ -292,6 +292,13 @@ times. A job's slot is freed once its outcome is queued; the row stays `running`
 can't be fetched twice. Shutdown drains the queue. A node that dies with queued outcomes leaves those jobs to the
 rescuer.
 
+**Discard handlers.** When an `IJobDiscardHandler` is registered, the executor attaches a continuation to the
+completer's write and, if the state written is `discarded` or `cancelled` (including a retry that `cancel_attempted_at`
+turned into a cancellation), queues the job for its handlers. The rescuer and the scheduler queue their own discards
+and cancellations on the leader. A background loop reads the final rows, then calls the handlers in a fresh scope per
+job; the worker slot is long gone by then. Shutdown waits 5 s for queued calls after the completer drains, then
+cancels and drops the rest. See [discard-handlers.md](discard-handlers.md).
+
 **Elector** (River's `leadership/elector.go`). Every 5 s ±1 s, a follower runs `DELETE expired; INSERT … ON CONFLICT
 (name) DO NOTHING RETURNING *` in one transaction. The TTL is the interval plus 10 s, and a leader trusts its term only
 until TTL - 1 s, counted from when the attempt started. The leader re-elects with `UPDATE … WHERE leader_id = me AND

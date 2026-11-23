@@ -16,6 +16,7 @@ internal sealed class Maintenance(
     IRetryPolicy retryPolicy,
     TimeProvider timeProvider,
     Action<string> onQueueAvailable,
+    DiscardHooks discardHooks,
     ILogger logger)
 {
     private const int BatchSize = 1_000;
@@ -49,6 +50,7 @@ internal sealed class Maintenance(
         {
             var command = runtime.DataSource.CreateCommand(runtime.Sql.Schedule);
             var queues = new HashSet<string>(StringComparer.Ordinal);
+            var discarded = new List<long>();
             var count = 0;
             await using (command.ConfigureAwait(false))
             {
@@ -59,12 +61,23 @@ internal sealed class Maintenance(
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
                         count++;
-                        if (reader.GetString(1) == "available")
+                        switch (reader.GetString(1))
                         {
-                            queues.Add(reader.GetString(0));
+                            case "available":
+                                queues.Add(reader.GetString(0));
+                                break;
+                            case "discarded":
+                                discarded.Add(reader.GetInt64(2));
+                                break;
                         }
                     }
                 }
+            }
+
+            // Only once the reader is disposed is the statement committed; handlers must not read it earlier.
+            foreach (var id in discarded)
+            {
+                discardHooks.Enqueue(new Discard(id, JobDiscardReason.UniqueKeyConflict));
             }
 
             if (queues.Count > 0)
@@ -151,7 +164,17 @@ internal sealed class Maintenance(
                     });
                     update.Parameters.Add(OxbowClient.TextArray("state", decisions.Select(d => JobStates.ToDb(d.State)).ToArray()));
                     update.Parameters.AddWithValue("stuck_horizon", stuckHorizon);
-                    rescued += await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    foreach (var row in await JobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))
+                    {
+                        rescued++;
+                        if (row.State is JobState.Discarded or JobState.Cancelled)
+                        {
+                            discardHooks.Enqueue(new Discard(
+                                row.Id,
+                                row.State == JobState.Discarded ? JobDiscardReason.AttemptsExhausted : JobDiscardReason.CancelRequested,
+                                Row: row));
+                        }
+                    }
                 }
             }
 

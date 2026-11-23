@@ -28,6 +28,11 @@ All notable changes to this project are documented here. The format follows
   0.1.0-alpha.3 pick those up at their cancel poll instead.
 - `JobFilter`, now the base of `JobListQuery`, with `BatchId`, `Metadata` (JSON containment) and `Tags` (all of)
   filters for `ListAsync` and the bulk operations.
+- Job output: `job.SetOutput(value)` records a result in `metadata.output` with the completion, read back with
+  `JobRow.Output` and `JobRow.GetOutput<T>()`; capped at `JobRow.MaxOutputSize` (1 MiB). `WorkResult.Output` in
+  `Oxbow.Testing`.
+- Discard handlers: `AddDiscardHandler<T>()` registers an `IJobDiscardHandler`, called best-effort after a job is
+  discarded or cancelled by its worker, a cancel request, the rescuer or the scheduler's unique-key check.
 
 ### Changed
 
