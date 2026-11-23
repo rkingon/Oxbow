@@ -32,6 +32,14 @@ internal sealed class OxbowRuntime
                 "OxbowOptions.EncryptAllArgs needs an IJobArgsProtector. Register one, e.g. with AddArgsEncryption() from Oxbow.DataProtection.");
         }
 
+        if (Options.RequireAmbientTransaction
+            && services.GetService<IServiceProviderIsService>()?.IsService(typeof(IOxbowTransactionAccessor)) != true)
+        {
+            throw new InvalidOperationException(
+                "OxbowOptions.RequireAmbientTransaction needs an IOxbowTransactionAccessor. Register one with " +
+                "AddTransactionAccessor<T>(), or AddDbContextTransaction<TContext>() from Oxbow.EntityFrameworkCore.");
+        }
+
         var clientId = Options.ClientId ?? $"{Environment.MachineName}_{Guid.NewGuid():N}";
         ClientId = clientId.Length > 120 ? clientId[..120] : clientId;
     }

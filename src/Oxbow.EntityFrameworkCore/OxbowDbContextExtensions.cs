@@ -73,11 +73,18 @@ public static class OxbowDbContextExtensions
     private static (NpgsqlConnection Connection, NpgsqlTransaction Transaction) Resolve(DbContext dbContext)
     {
         ArgumentNullException.ThrowIfNull(dbContext);
-        var current = dbContext.Database.CurrentTransaction
-            ?? throw new InvalidOperationException(
-                "The DbContext has no current transaction, so the job would commit on its own, ahead of SaveChanges. " +
-                "Call dbContext.Database.BeginTransactionAsync() first, or use IOxbowClient.InsertAsync without a " +
-                "DbContext if you meant to commit the job immediately.");
+        return Current(dbContext) ?? throw new InvalidOperationException(
+            "The DbContext has no current transaction, so the job would commit on its own, ahead of SaveChanges. " +
+            "Call dbContext.Database.BeginTransactionAsync() first, or use IOxbowClient.InsertAsync without a " +
+            "DbContext if you meant to commit the job immediately.");
+    }
+
+    internal static (NpgsqlConnection Connection, NpgsqlTransaction Transaction)? Current(DbContext dbContext)
+    {
+        if (dbContext.Database.CurrentTransaction is not { } current)
+        {
+            return null;
+        }
 
         if (dbContext.Database.GetDbConnection() is not NpgsqlConnection connection
             || current.GetDbTransaction() is not NpgsqlTransaction transaction)

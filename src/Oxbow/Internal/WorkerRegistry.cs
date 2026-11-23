@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.DependencyInjection;
-using Oxbow.Processing;
 
 namespace Oxbow.Internal;
 
@@ -9,7 +8,7 @@ internal abstract class WorkerRegistration
 {
     public abstract Type ArgsType { get; }
 
-    public abstract WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector);
+    public abstract WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector, IJobRuntime? runtime = null);
 }
 
 internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
@@ -18,13 +17,13 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
 {
     public override Type ArgsType => typeof(TArgs);
 
-    public override WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector)
+    public override WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector, IJobRuntime? runtime = null)
     {
         var typeInfo = (JsonTypeInfo<TArgs>)json.GetTypeInfo(typeof(TArgs));
         var args = ArgsEnvelope.Open(row, protector).Deserialize(typeInfo)
             ?? throw new JsonException($"Args for job {row.Id} deserialized to null.");
         IWorker<TArgs> worker = services.GetRequiredService<TWorker>();
-        return new Unit(worker, new Job<TArgs>(row, args));
+        return new Unit(worker, runtime is null ? new Job<TArgs>(row, args) : new Job<TArgs>(row, args, runtime));
     }
 
     private sealed class Unit(IWorker<TArgs> worker, Job<TArgs> job) : WorkUnit
@@ -37,7 +36,6 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
 
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
 
-        public override void Attach(JobControl control) => job.Control = control;
         public override object? Output => job.Output;
     }
 }
@@ -52,7 +50,6 @@ internal abstract class WorkUnit
 
     public abstract Task WorkAsync(CancellationToken cancellationToken);
 
-    public abstract void Attach(JobControl control);
     public abstract object? Output { get; }
 }
 

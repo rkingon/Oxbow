@@ -1,0 +1,6 @@
+#nullable enable
+Oxbow.IJobRuntime
+Oxbow.IJobRuntime.HeartbeatAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime.ReportProgressAsync(double percent, string? message, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime.UtcNow.get -> System.DateTimeOffset
+Oxbow.Job<TArgs>.Job(Oxbow.JobRow! row, TArgs args, Oxbow.IJobRuntime! runtime) -> void

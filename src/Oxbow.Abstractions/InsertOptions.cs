@@ -11,7 +11,7 @@ public sealed record InsertOptions
     /// <summary>Priority from 1 (highest) to 4. Default 1.</summary>
     public int? Priority { get; init; }
 
-    /// <summary>Attempts before a failing job is discarded. Default <see cref="OxbowOptions.MaxAttempts"/>.</summary>
+    /// <summary>Attempts before a failing job is discarded. Default <c>OxbowOptions.MaxAttempts</c>.</summary>
     public int? MaxAttempts { get; init; }
 
     /// <summary>Run no earlier than this. A future time inserts the job as <see cref="JobState.Scheduled"/>.</summary>
@@ -39,7 +39,7 @@ public sealed record InsertOptions
     public SequenceContinueOn? SequenceContinueOn { get; init; }
 
     /// <summary>
-    /// The partition key for the queue's <see cref="QueueOptions.ConcurrencyLimit"/>, up to 255 characters. Default: the
+    /// The partition key for the queue's <c>QueueOptions.ConcurrencyLimit</c>, up to 255 characters. Default: the
     /// args' <see cref="PartitionKeyAttribute"/> properties, or none (unlimited).
     /// </summary>
     public string? PartitionKey { get; init; }

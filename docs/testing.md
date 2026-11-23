@@ -1,6 +1,6 @@
 # Testing
 
-`Oxbow.Testing` has two helpers.
+`Oxbow.Testing` has helpers for asserting inserts, unit testing code that enqueues, and running workers.
 
 ## Assert inserts inside the test's transaction
 
@@ -21,6 +21,25 @@ await transaction.RollbackAsync(); // nothing persists
 Failures throw `OxbowAssertionException`, so it works with any test framework. For kinds with
 [encrypted args](encryption.md#testing), set `ArgsProtector`.
 
+## Unit test code that enqueues
+
+`RecordingOxbowClient` is an in-memory `IOxbowClient`. Pass it to code that enqueues, then assert what it stored:
+
+```csharp
+var oxbow = new RecordingOxbowClient(insertMiddleware: [new StampTenant(tenant)]);
+await new PlaceOrder(oxbow).ExecuteAsync(orderId);
+
+var job = Assert.Single(oxbow.Inserted<ShipOrder>());   // Job<ShipOrder>: typed args and the stored row
+Assert.Equal(orderId, job.Args.OrderId);
+Assert.Equal("acme", job.Metadata.GetProperty("tenant").GetString());
+Assert.Equal("shipping", oxbow.Jobs[0].Options?.Queue);   // options in effect, args defaults included
+```
+
+Inserts run the given insert middleware and are stored as Oxbow would store them. Reads, cancel, retry, delete and
+their bulk forms act on what's stored. Nothing is worked, and there are no transactions, unique keys or sequence
+ordering. Keys derived from `[UniqueKey]`, `[PartitionKey]` and `[SequenceKey]` aren't computed. Cover those, and
+rollback, with integration tests.
+
 ## Run a worker without a database
 
 ```csharp
@@ -34,6 +53,15 @@ Assert.Equal("sent", result.Output?.GetProperty("status").GetString());  // what
 The harness opens a DI scope, runs your registered work middleware, applies the worker's timeout, and reports what
 Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`. `result.Progress` is the progress the
 worker last reported; heartbeats do nothing.
+
+To call a worker directly instead, create the job with a `RecordingJobRuntime` to see its heartbeats and every progress
+report:
+
+```csharp
+var runtime = new RecordingJobRuntime();
+await worker.WorkAsync(new Job<Import>(row, new Import(10), runtime), CancellationToken.None);
+Assert.Equal([50.0, 100.0], runtime.Progress.Select(p => p.Percent));
+```
 
 For full integration tests, run Postgres in a container (Testcontainers), apply `OxbowSchema.GetMigrations(0)`, and use a
 unique `TablePrefix` per test to isolate them, as Oxbow's own suite does.

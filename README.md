@@ -124,6 +124,20 @@ public sealed record Charge([property: UniqueKey] string InvoiceId, string Trace
 }
 ```
 
+### Layered apps
+
+Job args, workers and the code that enqueues can live in projects that reference only `Oxbow.Abstractions`, with no
+Npgsql. The host registers a transaction accessor, and `IOxbowClient.InsertAsync(args)` joins the unit of work's
+transaction:
+
+```csharp
+services.AddOxbow(o => o.RequireAmbientTransaction = true)
+    .AddWorker<ShipOrder, ShipOrderWorker>()
+    .AddDbContextTransaction<AppDbContext>();
+```
+
+See [docs/abstractions.md](docs/abstractions.md).
+
 ## Managing jobs and queues
 
 `CancelAsync`, `RetryAsync`, `DeleteAsync`, `GetAsync`, `ListAsync` (filters and a cursor), `PauseQueueAsync`,
@@ -186,6 +200,7 @@ builder.Services.AddOpenTelemetry()
 | Package | |
 |---|---|
 | `Oxbow` | The client, processor and schema |
+| `Oxbow.Abstractions` | Job args, workers, `IOxbowClient` and read models, without Npgsql: for domain and application projects |
 | `Oxbow.EntityFrameworkCore` | Insert in a `DbContext`'s transaction; schema helpers for EF migrations |
 | `Oxbow.Testing` | Insert assertions and an inline worker harness |
 | `Oxbow.DataProtection` | Encrypt args at rest with ASP.NET Core Data Protection |

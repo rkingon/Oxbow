@@ -19,7 +19,7 @@ public sealed class TestApp : IAsyncDisposable
 
     public string Prefix { get; }
 
-    public IOxbowClient Client => Host.Services.GetRequiredService<IOxbowClient>();
+    public IOxbowNpgsqlClient Client => Host.Services.GetRequiredService<IOxbowNpgsqlClient>();
 
     public JobRecorder Recorder => Host.Services.GetRequiredService<JobRecorder>();
 

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -13,37 +14,62 @@ namespace Oxbow.Internal;
 internal sealed partial class OxbowClient(
     OxbowRuntime runtime,
     WorkerRegistry workers,
-    IEnumerable<IJobInsertMiddleware> insertMiddleware,
-    TimeProvider timeProvider) : IOxbowClient
+    IServiceProvider services,
+    TimeProvider timeProvider) : IOxbowNpgsqlClient
 {
-    private readonly IJobInsertMiddleware[] _insertMiddleware = insertMiddleware.ToArray();
+    // Singleton middleware is resolved once; with any scoped or transient middleware, the whole list is resolved per
+    // insert from the inserting scope, or a scope of its own, to keep registration order across lifetimes.
+    private readonly IJobInsertMiddleware[]? _insertMiddleware = services.GetService<PerInsertMiddleware>() is null
+        ? services.GetServices<IJobInsertMiddleware>().ToArray()
+        : null;
+
     private readonly ConcurrentDictionary<string, long> _lastNotified = new(StringComparer.Ordinal);
 
     private const int BulkBatchSize = 1_000;
 
-    public async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
+    public Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
+        where TArgs : IJobArgs =>
+        InsertAsync(args, options, scope: null, cancellationToken);
+
+    internal async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options, IServiceProvider? scope, CancellationToken cancellationToken)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(args);
-        var results = await InsertManyAsync([new InsertManyItem(args, options)], cancellationToken).ConfigureAwait(false);
+        var results = await InsertManyAsync([new InsertManyItem(args, options)], scope, cancellationToken).ConfigureAwait(false);
         return results[0];
     }
 
-    public async Task<InsertResult> InsertAsync<TArgs>(
+    public Task<InsertResult> InsertAsync<TArgs>(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         TArgs args,
         InsertOptions? options = null,
         CancellationToken cancellationToken = default)
+        where TArgs : IJobArgs =>
+        InsertAsync(connection, transaction, args, options, scope: null, cancellationToken);
+
+    internal async Task<InsertResult> InsertAsync<TArgs>(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        TArgs args,
+        InsertOptions? options,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
         where TArgs : IJobArgs
     {
         ArgumentNullException.ThrowIfNull(args);
-        var results = await InsertManyAsync(connection, transaction, [new InsertManyItem(args, options)], cancellationToken)
+        var results = await InsertManyAsync(connection, transaction, [new InsertManyItem(args, options)], scope, cancellationToken)
             .ConfigureAwait(false);
         return results[0];
     }
 
-    public async Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default) =>
+        InsertManyAsync(items, scope: null, cancellationToken);
+
+    internal async Task<IReadOnlyList<InsertResult>> InsertManyAsync(
+        IEnumerable<InsertManyItem> items,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
     {
         var jobs = Prepare(items, checkKinds: true);
         if (jobs.Count == 0)
@@ -51,33 +77,37 @@ internal sealed partial class OxbowClient(
             return [];
         }
 
-        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using (connection.ConfigureAwait(false))
-        {
-            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            await using (transaction.ConfigureAwait(false))
-            {
-                var results = await InsertPreparedAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return results;
-            }
-        }
+        return await OnAmbientOrOwnTransactionAsync(
+            scope,
+            (connection, transaction) => InsertPreparedAsync(connection, transaction, jobs, scope, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public Task<IReadOnlyList<InsertResult>> InsertManyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         IEnumerable<InsertManyItem> items,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        InsertManyAsync(connection, transaction, items, scope: null, cancellationToken);
+
+    internal Task<IReadOnlyList<InsertResult>> InsertManyAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
     {
         ValidateCallerConnection(connection, transaction);
         var jobs = Prepare(items, checkKinds: true);
         return jobs.Count == 0
             ? Task.FromResult<IReadOnlyList<InsertResult>>([])
-            : InsertPreparedAsync(connection, transaction, jobs, cancellationToken);
+            : InsertPreparedAsync(connection, transaction, jobs, scope, cancellationToken);
     }
 
-    public async Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default)
+    public Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default) =>
+        InsertManyFastAsync(items, scope: null, cancellationToken);
+
+    internal async Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, IServiceProvider? scope, CancellationToken cancellationToken)
     {
         var jobs = PrepareFast(items);
         if (jobs.Count == 0)
@@ -85,28 +115,29 @@ internal sealed partial class OxbowClient(
             return 0;
         }
 
-        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using (connection.ConfigureAwait(false))
-        {
-            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            await using (transaction.ConfigureAwait(false))
-            {
-                var count = await CopyPreparedAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return count;
-            }
-        }
+        return await OnAmbientOrOwnTransactionAsync(
+            scope,
+            (connection, transaction) => CopyPreparedAsync(connection, transaction, jobs, scope, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public Task<int> InsertManyFastAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         IEnumerable<InsertManyItem> items,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        InsertManyFastAsync(connection, transaction, items, scope: null, cancellationToken);
+
+    internal Task<int> InsertManyFastAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
     {
         ValidateCallerConnection(connection, transaction);
         var jobs = PrepareFast(items);
-        return jobs.Count == 0 ? Task.FromResult(0) : CopyPreparedAsync(connection, transaction, jobs, cancellationToken);
+        return jobs.Count == 0 ? Task.FromResult(0) : CopyPreparedAsync(connection, transaction, jobs, scope, cancellationToken);
     }
 
     private List<JobInsertParams> PrepareFast(IEnumerable<InsertManyItem> items)
@@ -122,10 +153,47 @@ internal sealed partial class OxbowClient(
         return jobs;
     }
 
+    /// <summary>
+    /// Runs <paramref name="insert"/> in the ambient transaction if the inserting scope's accessor has one, otherwise in a
+    /// transaction of its own, unless <see cref="OxbowOptions.RequireAmbientTransaction"/> forbids that.
+    /// </summary>
+    private async Task<T> OnAmbientOrOwnTransactionAsync<T>(
+        IServiceProvider? scope,
+        Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> insert,
+        CancellationToken cancellationToken)
+    {
+        if (scope?.GetService<IOxbowTransactionAccessor>()?.Current is var (ambientConnection, ambientTransaction))
+        {
+            ValidateCallerConnection(ambientConnection, ambientTransaction);
+            return await insert(ambientConnection, ambientTransaction).ConfigureAwait(false);
+        }
+
+        if (runtime.Options.RequireAmbientTransaction)
+        {
+            throw new InvalidOperationException(
+                "OxbowOptions.RequireAmbientTransaction is set and there's no current transaction to insert in. Insert " +
+                "through the scoped IOxbowClient inside a unit of work with a transaction begun, or pass a connection " +
+                "and transaction explicitly.");
+        }
+
+        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using (connection.ConfigureAwait(false))
+        {
+            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (transaction.ConfigureAwait(false))
+            {
+                var result = await insert(connection, transaction).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+        }
+    }
+
     private async Task<int> CopyPreparedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         List<JobInsertParams> jobs,
+        IServiceProvider? scope,
         CancellationToken cancellationToken)
     {
         var count = 0;
@@ -134,7 +202,7 @@ internal sealed partial class OxbowClient(
             count = await CopyAsync(connection, transaction, context.Jobs, context.CancellationToken).ConfigureAwait(false);
             return [];
         };
-        await RunInsertPipelineAsync(jobs, copy, cancellationToken).ConfigureAwait(false);
+        await RunInsertPipelineAsync(jobs, copy, scope, cancellationToken).ConfigureAwait(false);
         return count;
     }
 
@@ -184,23 +252,23 @@ internal sealed partial class OxbowClient(
         return count;
     }
 
-    public async Task<BatchInsertResult> InsertBatchAsync(
+    public Task<BatchInsertResult> InsertBatchAsync(
         IEnumerable<InsertManyItem> items,
         BatchOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        InsertBatchAsync(items, options, scope: null, cancellationToken);
+
+    internal Task<BatchInsertResult> InsertBatchAsync(
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
     {
         var batch = PrepareBatch(items, options);
-        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using (connection.ConfigureAwait(false))
-        {
-            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-            await using (transaction.ConfigureAwait(false))
-            {
-                var result = await InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken).ConfigureAwait(false);
-                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return result;
-            }
-        }
+        return OnAmbientOrOwnTransactionAsync(
+            scope,
+            (connection, transaction) => InsertBatchPreparedAsync(connection, transaction, batch, scope, cancellationToken),
+            cancellationToken);
     }
 
     public Task<BatchInsertResult> InsertBatchAsync(
@@ -208,11 +276,20 @@ internal sealed partial class OxbowClient(
         NpgsqlTransaction? transaction,
         IEnumerable<InsertManyItem> items,
         BatchOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        InsertBatchAsync(connection, transaction, items, options, scope: null, cancellationToken);
+
+    internal Task<BatchInsertResult> InsertBatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options,
+        IServiceProvider? scope,
+        CancellationToken cancellationToken)
     {
         ValidateCallerConnection(connection, transaction);
         var batch = PrepareBatch(items, options);
-        return InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken);
+        return InsertBatchPreparedAsync(connection, transaction, batch, scope, cancellationToken);
     }
 
     public async Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default)
@@ -274,6 +351,7 @@ internal sealed partial class OxbowClient(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         PreparedBatch batch,
+        IServiceProvider? scope,
         CancellationToken cancellationToken)
     {
         long batchId;
@@ -304,7 +382,7 @@ internal sealed partial class OxbowClient(
             {
                 forwarded = true;
                 return Task.FromResult<IReadOnlyList<InsertResult>>([]);
-            }, cancellationToken).ConfigureAwait(false);
+            }, scope, cancellationToken).ConfigureAwait(false);
             return forwarded ? CallbackSpec(callback) : null;
         }
 
@@ -325,6 +403,7 @@ internal sealed partial class OxbowClient(
 
                 return ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken, insert);
             },
+            scope,
             cancellationToken).ConfigureAwait(false);
         if (!inserted)
         {
@@ -1047,17 +1126,31 @@ internal sealed partial class OxbowClient(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         List<JobInsertParams> jobs,
+        IServiceProvider? scope,
         CancellationToken cancellationToken) =>
         RunInsertPipelineAsync(
             jobs,
             context => ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken),
+            scope,
             cancellationToken);
 
     private async Task<IReadOnlyList<InsertResult>> RunInsertPipelineAsync(
         List<JobInsertParams> jobs,
         JobInsertDelegate insert,
+        IServiceProvider? scope,
         CancellationToken cancellationToken)
     {
+        if (_insertMiddleware is null && scope is null)
+        {
+            var ownScope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+            await using (ownScope.ConfigureAwait(false))
+            {
+                return await RunInsertPipelineAsync(jobs, insert, ownScope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        var insertMiddleware = _insertMiddleware ?? scope!.GetServices<IJobInsertMiddleware>().ToArray();
+
         using var activity = OxbowDiagnostics.ActivitySource.StartActivity("oxbow.insert", ActivityKind.Producer);
         activity?.SetTag("oxbow.jobs.count", jobs.Count);
         if (activity is not null)
@@ -1069,9 +1162,9 @@ internal sealed partial class OxbowClient(
         }
 
         var pipeline = insert;
-        for (var i = _insertMiddleware.Length - 1; i >= 0; i--)
+        for (var i = insertMiddleware.Length - 1; i >= 0; i--)
         {
-            var middleware = _insertMiddleware[i];
+            var middleware = insertMiddleware[i];
             var next = pipeline;
             pipeline = context => middleware.InvokeAsync(context, next);
         }

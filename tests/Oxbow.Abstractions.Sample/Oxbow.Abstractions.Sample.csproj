@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- An application layer that owns its jobs with only Oxbow.Abstractions: no Npgsql, no runtime. -->
+  <PropertyGroup>
+    <RootNamespace>Oxbow.Abstractions.Sample</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Oxbow.Abstractions\Oxbow.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

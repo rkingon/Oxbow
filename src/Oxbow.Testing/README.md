@@ -10,6 +10,14 @@ var job = await assert.InsertedAsync<SendEmail>(connection, transaction, new() {
 await assert.NotInsertedAsync<ChargeCard>(connection, transaction);
 ```
 
+## Unit test code that enqueues
+
+```csharp
+var oxbow = new RecordingOxbowClient();
+await new PlaceOrder(oxbow).ExecuteAsync(42);
+Assert.Equal(42, Assert.Single(oxbow.Inserted<ShipOrder>()).Args.OrderId);
+```
+
 ## Run a worker inline, without a database
 
 ```csharp

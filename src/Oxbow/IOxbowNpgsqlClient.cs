@@ -3,18 +3,13 @@ using Npgsql;
 
 namespace Oxbow;
 
-/// <summary>Inserts and manages jobs. Registered as a singleton by <c>AddOxbow</c>.</summary>
-public interface IOxbowClient
+/// <summary>
+/// <see cref="IOxbowClient"/> plus the members that need Npgsql or the runtime: inserts on the caller's connection and
+/// transaction, and periodic jobs stored in the database. Always a singleton, and never joins an ambient transaction.
+/// The same members are available on <see cref="IOxbowClient"/> as extension methods.
+/// </summary>
+public interface IOxbowNpgsqlClient : IOxbowClient
 {
-    /// <summary>Inserts a job on a connection of its own.</summary>
-    /// <typeparam name="TArgs">The args type.</typeparam>
-    /// <param name="args">The job's args.</param>
-    /// <param name="options">Insert options.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The insert result.</returns>
-    Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
-        where TArgs : IJobArgs;
-
     /// <summary>
     /// Inserts a job on the caller's connection, inside <paramref name="transaction"/> if given, so the job commits or
     /// rolls back with the caller's data.
@@ -34,11 +29,6 @@ public interface IOxbowClient
         CancellationToken cancellationToken = default)
         where TArgs : IJobArgs;
 
-    /// <summary>Inserts many jobs in one statement on a connection of its own.</summary>
-    /// <param name="items">The jobs.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The insert results, in order.</returns>
-    Task<IReadOnlyList<InsertResult>> InsertManyAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default);
 
     /// <summary>Inserts many jobs in one statement on the caller's connection and transaction.</summary>
     /// <param name="connection">An open connection.</param>
@@ -52,15 +42,6 @@ public interface IOxbowClient
         IEnumerable<InsertManyItem> items,
         CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Inserts many jobs with binary COPY on a connection of its own: the fastest path, returning only a count. Unique
-    /// jobs aren't supported (COPY can't skip duplicates); use <see cref="InsertManyAsync(IEnumerable{InsertManyItem}, CancellationToken)"/>
-    /// for those. Insert middleware runs, with an empty result list.
-    /// </summary>
-    /// <param name="items">The jobs.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The number of jobs inserted.</returns>
-    Task<int> InsertManyFastAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken = default);
 
     /// <summary>Inserts many jobs with binary COPY on the caller's connection and transaction.</summary>
     /// <param name="connection">An open connection.</param>
@@ -74,19 +55,6 @@ public interface IOxbowClient
         IEnumerable<InsertManyItem> items,
         CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Inserts a batch of jobs on a connection of its own. The batch and its jobs are written in one statement, so the
-    /// batch is never seen without them. Once every job has finished, the leader enqueues the callbacks in
-    /// <paramref name="options"/>. An empty batch finishes at once and enqueues both.
-    /// </summary>
-    /// <param name="items">The member jobs.</param>
-    /// <param name="options">The callbacks.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The batch ID and the insert results, in order.</returns>
-    Task<BatchInsertResult> InsertBatchAsync(
-        IEnumerable<InsertManyItem> items,
-        BatchOptions? options = null,
-        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Inserts a batch of jobs on the caller's connection and transaction, so the batch commits or rolls back with the
@@ -105,87 +73,6 @@ public interface IOxbowClient
         BatchOptions? options = null,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Gets a batch and its progress.</summary>
-    /// <param name="id">The batch's ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The batch, or <see langword="null"/> if it doesn't exist or has been cleaned up.</returns>
-    Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Cancels a job. A job that hasn't started is cancelled at once and never runs. A running job's worker is
-    /// signalled through its cancellation token, on whichever node runs it, and decides whether to stop.
-    /// </summary>
-    /// <param name="id">The job's ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The job after the request, or <see langword="null"/> if it doesn't exist.</returns>
-    Task<JobRow?> CancelAsync(long id, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Makes a job available to run now. Running jobs are left alone; a job out of attempts gets one more.
-    /// </summary>
-    /// <param name="id">The job's ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The job after the request, or <see langword="null"/> if it doesn't exist.</returns>
-    Task<JobRow?> RetryAsync(long id, CancellationToken cancellationToken = default);
-
-    /// <summary>Deletes a job unless it's running.</summary>
-    /// <param name="id">The job's ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The job, deleted unless it was running, or <see langword="null"/> if it doesn't exist.</returns>
-    Task<JobRow?> DeleteAsync(long id, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Cancels every job matching <paramref name="filter"/>, as <see cref="CancelAsync"/> would one at a time. Jobs are
-    /// processed in batches, each committed on its own, so a failure part-way leaves earlier batches cancelled; running
-    /// it again is safe. Jobs inserted while it runs may or may not be included.
-    /// </summary>
-    /// <param name="filter">
-    /// The jobs to cancel. A filter that matches everything is rejected unless <see cref="JobFilter.All"/> is set, and so
-    /// is a <see cref="JobListQuery"/>, whose paging would suggest only one page is affected.
-    /// </param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>How many jobs were cancelled, and how many running ones were asked to stop.</returns>
-    Task<CancelManyResult> CancelManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Makes every matching job available to run now, as <see cref="RetryAsync"/> would one at a time, in batches like
-    /// <see cref="CancelManyAsync"/>. A job that would take a unique key another live job holds is skipped, where
-    /// <see cref="RetryAsync"/> would throw.
-    /// </summary>
-    /// <param name="filter">The jobs to retry; see <see cref="CancelManyAsync"/>.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>How many jobs were made available, and how many were skipped for their unique key.</returns>
-    Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
-
-    /// <summary>Deletes every matching job that isn't running, in batches like <see cref="CancelManyAsync"/>.</summary>
-    /// <param name="filter">The jobs to delete; see <see cref="CancelManyAsync"/>.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>How many jobs were deleted.</returns>
-    Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
-
-    /// <summary>Gets a job.</summary>
-    /// <param name="id">The job's ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The job, or <see langword="null"/> if it doesn't exist.</returns>
-    Task<JobRow?> GetAsync(long id, CancellationToken cancellationToken = default);
-
-    /// <summary>Lists jobs, ordered by ID, one page at a time.</summary>
-    /// <param name="query">Filters and paging.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>A page of jobs and the cursor for the next one.</returns>
-    Task<JobListResult> ListAsync(JobListQuery query, CancellationToken cancellationToken = default);
-
-    /// <summary>Pauses a queue on every node: running jobs finish, no new ones start.</summary>
-    /// <param name="queue">The queue, or <c>*</c> for all queues.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>A task that completes when the pause is recorded.</returns>
-    Task PauseQueueAsync(string queue, CancellationToken cancellationToken = default);
-
-    /// <summary>Resumes a paused queue on every node.</summary>
-    /// <param name="queue">The queue, or <c>*</c> for all queues.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>A task that completes when the resume is recorded.</returns>
-    Task ResumeQueueAsync(string queue, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a periodic job stored in the database, which the leader enqueues without a restart. Fails if the name is
@@ -204,6 +91,7 @@ public interface IOxbowClient
         IJobArgs args,
         InsertOptions? options = null,
         CancellationToken cancellationToken = default);
+
 
     /// <summary>
     /// Creates a periodic job from a kind and args JSON, for callers without the args type, such as admin tools.
@@ -225,6 +113,7 @@ public interface IOxbowClient
         InsertOptions? options = null,
         CancellationToken cancellationToken = default);
 
+
     /// <summary>
     /// Creates or replaces a periodic job stored in the database, which the leader enqueues without a restart. Replacing
     /// keeps its run history and pause; a changed schedule starts again from its next occurrence.
@@ -241,6 +130,7 @@ public interface IOxbowClient
         IJobArgs args,
         InsertOptions? options = null,
         CancellationToken cancellationToken = default);
+
 
     /// <summary>
     /// Creates or replaces a periodic job from a kind and args JSON, for callers without the args type, such as admin
@@ -261,11 +151,13 @@ public interface IOxbowClient
         InsertOptions? options = null,
         CancellationToken cancellationToken = default);
 
+
     /// <summary>Pauses a periodic job, stored or registered in code, until it's resumed. The pause persists across restarts.</summary>
     /// <param name="name">The job's name.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The job after the request, or <see langword="null"/> if it doesn't exist.</returns>
     Task<PeriodicJobRow?> PausePeriodicJobAsync(string name, CancellationToken cancellationToken = default);
+
 
     /// <summary>
     /// Resumes a paused periodic job. Runs missed while paused aren't enqueued; the next run is the schedule's next
@@ -276,6 +168,7 @@ public interface IOxbowClient
     /// <returns>The job after the request, or <see langword="null"/> if it doesn't exist.</returns>
     Task<PeriodicJobRow?> ResumePeriodicJobAsync(string name, CancellationToken cancellationToken = default);
 
+
     /// <summary>
     /// Deletes a periodic job. For a job still registered in code, this only resets its stored state: the leader
     /// recreates it.
@@ -285,11 +178,13 @@ public interface IOxbowClient
     /// <returns>The deleted job, or <see langword="null"/> if it doesn't exist.</returns>
     Task<PeriodicJobRow?> DeletePeriodicJobAsync(string name, CancellationToken cancellationToken = default);
 
+
     /// <summary>Gets a periodic job.</summary>
     /// <param name="name">The job's name.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The job, or <see langword="null"/> if it doesn't exist.</returns>
     Task<PeriodicJobRow?> GetPeriodicJobAsync(string name, CancellationToken cancellationToken = default);
+
 
     /// <summary>Lists periodic jobs, stored or registered in code, ordered by name, one page at a time.</summary>
     /// <param name="query">Paging.</param>

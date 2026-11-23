@@ -257,7 +257,7 @@ internal sealed class PeriodicEnqueuer(OxbowRuntime runtime, OxbowClient client,
 
                 try
                 {
-                    await client.InsertPreparedAsync(connection, transaction, [job], cancellationToken).ConfigureAwait(false);
+                    await client.InsertPreparedAsync(connection, transaction, [job], scope: null, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException and not NpgsqlException { IsTransient: true })
                 {

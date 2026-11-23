@@ -8,7 +8,7 @@ namespace Oxbow.Processing;
 /// Writes one attempt's heartbeat and progress. Each write is guarded by the attempt's <c>attempted_at</c> and the
 /// running state, so a finished, rescued or superseded attempt can't write.
 /// </summary>
-internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider timeProvider)
+internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider timeProvider) : IJobRuntime
 {
     private static readonly TimeSpan MaxHeartbeatInterval = TimeSpan.FromSeconds(30);
 
@@ -16,7 +16,7 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
 
     private long _lastWrite = NeverWritten;
 
-    public DateTimeOffset Now => timeProvider.GetUtcNow();
+    public DateTimeOffset UtcNow => timeProvider.GetUtcNow();
 
     // Each write updates a hot row; a tenth of the rescue horizon keeps the rescuer's view fresh enough.
     private TimeSpan HeartbeatInterval =>

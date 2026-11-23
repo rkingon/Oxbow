@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
-using Oxbow.Internal;
 
 namespace Oxbow;
 
@@ -59,7 +59,7 @@ public sealed class JobRow
     /// <summary>The job's sequence key, or <see langword="null"/> if it isn't in a sequence.</summary>
     public string? SequenceKey { get; init; }
 
-    /// <summary>The partition key the queue's <see cref="QueueOptions.ConcurrencyLimit"/> applies to, if any.</summary>
+    /// <summary>The partition key the queue's <c>QueueOptions.ConcurrencyLimit</c> applies to, if any.</summary>
     public string? PartitionKey { get; init; }
 
     /// <summary>
@@ -91,7 +91,7 @@ public sealed class JobRow
 
             try
             {
-                return value.Deserialize(OxbowJsonContext.Default.JobProgress);
+                return value.Deserialize(AbstractionsJsonContext.Default.JobProgress);
             }
             catch (JsonException)
             {
@@ -122,7 +122,7 @@ public sealed class JobRow
     /// <summary>Deserializes <see cref="Output"/>.</summary>
     /// <typeparam name="T">The output type.</typeparam>
     /// <param name="options">
-    /// Serializer options, typically the client's <see cref="OxbowOptions.JsonSerializerOptions"/>. Default:
+    /// Serializer options, typically the client's <c>OxbowOptions.JsonSerializerOptions</c>. Default:
     /// <see cref="JsonSerializerOptions.Web"/>.
     /// </param>
     /// <returns>The output, or <see langword="default"/> if none was recorded.</returns>
@@ -144,3 +144,6 @@ public sealed class JobRow
         return output.Deserialize((JsonTypeInfo<T>)options.GetTypeInfo(typeof(T)));
     }
 }
+
+[JsonSerializable(typeof(JobProgress))]
+internal sealed partial class AbstractionsJsonContext : JsonSerializerContext;

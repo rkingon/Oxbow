@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Oxbow\Oxbow.csproj" />
+    <ProjectReference Include="..\Oxbow.Abstractions.Sample\Oxbow.Abstractions.Sample.csproj" />
     <ProjectReference Include="..\..\src\Oxbow.Testing\Oxbow.Testing.csproj" />
     <ProjectReference Include="..\..\src\Oxbow.DataProtection\Oxbow.DataProtection.csproj" />
     <Using Include="Xunit" />
