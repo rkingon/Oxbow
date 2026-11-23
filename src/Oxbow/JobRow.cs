@@ -92,4 +92,16 @@ public sealed class JobRow
             }
         }
     }
+
+    /// <summary>
+    /// The batch this job is a member or callback of, from <c>metadata.oxbow:batch_id</c>; pass it to
+    /// <see cref="IOxbowClient.GetBatchAsync"/>.
+    /// </summary>
+    public long? BatchId =>
+        Metadata.ValueKind == JsonValueKind.Object
+        && Metadata.TryGetProperty("oxbow:batch_id", out var id)
+        && id.ValueKind == JsonValueKind.Number
+        && id.TryGetInt64(out var value)
+            ? value
+            : null;
 }

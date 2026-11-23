@@ -92,4 +92,7 @@ public sealed class Job<TArgs>
         Progress = new JobProgress(percent, message, Attempt, Control?.Now ?? DateTimeOffset.UtcNow);
         return Control?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
     }
+
+    /// <summary>The batch this job is a member or callback of.</summary>
+    public long? BatchId => Row.BatchId;
 }

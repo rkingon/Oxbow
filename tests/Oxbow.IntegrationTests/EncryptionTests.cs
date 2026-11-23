@@ -236,6 +236,24 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         await Assert.ThrowsAsync<OxbowAssertionException>(() => new OxbowAssert(tablePrefix: prefix).InsertedAsync<SecretArgs>(connection, transaction));
     }
 
+    [Fact]
+    public async Task Batch_members_and_callbacks_are_stored_as_ciphertext()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix);
+
+        await app.Client.InsertBatchAsync(
+            [new InsertManyItem(new SecretArgs("member@example.com"))],
+            new BatchOptions { OnComplete = new BatchCallback(new SecretArgs("callback@example.com")) });
+        Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM public.{prefix}batch WHERE on_complete::text LIKE '%example.com%'"));
+
+        await WaitForEventsAsync(app, 2);
+        Assert.Contains("callback@example.com", app.Recorder.Events);
+        Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM public.{prefix}job WHERE args::text LIKE '%example.com%'"));
+    }
+
     private Task<TestApp> StartAsync(string prefix, Action<OxbowOptions>? configure = null, bool start = true) =>
         TestApp.StartAsync(
             database,
