@@ -16,6 +16,7 @@ internal sealed class OxbowSql
         var queue = $"{schema}.{prefix}queue";
         var periodic = $"{schema}.{prefix}periodic_job";
         var batch = $"{schema}.{prefix}batch";
+        var rateLimit = $"{schema}.{prefix}rate_limit";
 
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
@@ -99,12 +100,28 @@ internal sealed class OxbowSql
             ON CONFLICT (name) DO UPDATE SET updated_at = now() WHERE false
             """;
 
-        // GetAvailable for a queue with a concurrency limit. A key's room is the least of the global limit minus its
-        // running jobs and the local limit minus this node's (sent by the producer). Keys without room are filtered out
-        // before the scan's LIMIT, so a saturated key's backlog can't starve the others; the window then keeps at most
-        // `room` jobs per key.
+        // GetAvailable for a queue with a concurrency or rate limit. A key's room is the least of the global limit minus
+        // its running jobs, the local limit minus this node's (sent by the producer), and the starts its rate limit
+        // allows. Keys without room are filtered out before the scan's LIMIT, so a saturated key's backlog can't starve
+        // the others; the window then keeps at most `room` jobs per key, and the queue's rate limit caps the total.
+        //
+        // Rate limits are GCRA, run under the queue lock: with emission interval T and burst b, a limiter whose
+        // theoretical arrival time is tat allows b - ceil((tat - now()) / T) starts (tat no earlier than now()), and
+        // each start pushes tat T later. Only starts actually made advance it.
         GetAvailableLimited = $"""
-            WITH running AS (
+            WITH queue_rate AS (
+                SELECT greatest(q.rate_limit_tat, now()) AS tat0
+                FROM {queue} AS q
+                WHERE @rate_interval::bigint IS NOT NULL
+                  AND q.name = @queue
+            ),
+            allowed AS (
+                SELECT least(@max::int, (
+                    SELECT greatest(0, @rate_burst::int
+                        - ceil(extract(epoch FROM tat0 - now()) * 1000000 / @rate_interval::bigint)::bigint)
+                    FROM queue_rate)) AS n
+            ),
+            running AS (
                 SELECT partition_key, count(*)::int AS n
                 FROM {job}
                 WHERE @global_limit::int IS NOT NULL
@@ -116,11 +133,25 @@ internal sealed class OxbowSql
             local_running AS (
                 SELECT * FROM unnest(@local_keys::text[], @local_running::int[]) AS l(partition_key, n)
             ),
+            -- Keys whose tat has passed have their full burst, so they need no row here.
+            key_rate AS (
+                SELECT partition_key, tat AS tat0,
+                    greatest(0, @key_rate_burst::int
+                        - ceil(extract(epoch FROM tat - now()) * 1000000 / @key_rate_interval::bigint)::bigint)::int AS allowance
+                FROM {rateLimit}
+                WHERE @key_rate_interval::bigint IS NOT NULL
+                  AND queue = @queue
+                  AND tat > now()
+            ),
             room AS (
                 SELECT partition_key,
-                    least(@global_limit::int - coalesce(r.n, 0), @local_limit::int - coalesce(l.n, 0)) AS room
+                    least(
+                        @global_limit::int - coalesce(r.n, 0),
+                        @local_limit::int - coalesce(l.n, 0),
+                        coalesce(k.allowance, @key_rate_burst::int)) AS room
                 FROM running AS r
                 FULL JOIN local_running AS l USING (partition_key)
+                FULL JOIN key_rate AS k USING (partition_key)
             ),
             candidates AS (
                 SELECT id, partition_key, priority, scheduled_at
@@ -143,7 +174,8 @@ internal sealed class OxbowSql
                 FROM ranked
                 LEFT JOIN room USING (partition_key)
                 WHERE ranked.partition_key IS NULL
-                   OR ranked.rank <= coalesce(room.room, least(@global_limit::int, @local_limit::int))
+                   OR ranked.rank <= coalesce(
+                       room.room, least(@global_limit::int, @local_limit::int, @key_rate_burst::int), @max::int)
             ),
             -- LIMIT after SKIP LOCKED, so a row someone else holds doesn't use up a slot.
             locked AS (
@@ -152,22 +184,69 @@ internal sealed class OxbowSql
                 JOIN eligible AS e ON e.id = j.id
                 WHERE j.state = 'available'
                 ORDER BY e.priority, e.scheduled_at, e.id
-                LIMIT @max
+                LIMIT (SELECT n FROM allowed)
                 FOR UPDATE OF j SKIP LOCKED
+            ),
+            fetched AS (
+                UPDATE {job} AS j
+                SET state = 'running',
+                    attempt = j.attempt + 1,
+                    attempted_at = now(),
+                    attempted_by = array_append(
+                        CASE WHEN array_length(j.attempted_by, 1) >= 100
+                            THEN j.attempted_by[array_length(j.attempted_by, 1) - 98:]
+                            ELSE j.attempted_by
+                        END,
+                        @client_id)
+                FROM locked
+                WHERE j.id = locked.id
+                RETURNING {Columns("j")}
+            ),
+            queue_advance AS (
+                UPDATE {queue} AS q
+                SET rate_limit_tat = r.tat0 + interval '1 microsecond' * ((SELECT count(*) FROM fetched) * @rate_interval::bigint)
+                FROM queue_rate AS r
+                WHERE q.name = @queue
+                  AND EXISTS (SELECT 1 FROM fetched)
+            ),
+            key_advance AS (
+                INSERT INTO {rateLimit} (queue, partition_key, tat)
+                SELECT @queue::text, f.partition_key,
+                    coalesce(k.tat0, now()) + interval '1 microsecond' * (count(*) * @key_rate_interval::bigint)
+                FROM fetched AS f
+                LEFT JOIN key_rate AS k USING (partition_key)
+                WHERE @key_rate_interval::bigint IS NOT NULL
+                  AND f.partition_key IS NOT NULL
+                GROUP BY f.partition_key, k.tat0
+                ON CONFLICT (queue, partition_key) DO UPDATE SET tat = excluded.tat
             )
-            UPDATE {job} AS j
-            SET state = 'running',
-                attempt = j.attempt + 1,
-                attempted_at = now(),
-                attempted_by = array_append(
-                    CASE WHEN array_length(j.attempted_by, 1) >= 100
-                        THEN j.attempted_by[array_length(j.attempted_by, 1) - 98:]
-                        ELSE j.attempted_by
-                    END,
-                    @client_id)
-            FROM locked
-            WHERE j.id = locked.id
-            RETURNING {Columns("j")}
+            SELECT * FROM fetched
+            """;
+
+        // Run after GetAvailableLimited in its transaction: seconds until the queue's limiter next allows a start, and
+        // until the first throttled key's does; NULL or negative when there's nothing to wait for. Relative to now() so
+        // the producer's clock never meets the database's.
+        RateLimitWait = $"""
+            SELECT
+                (SELECT extract(epoch FROM rate_limit_tat - now())::float8
+                        - (@rate_burst::int - 1) * @rate_interval::bigint / 1e6::float8
+                 FROM {queue}
+                 WHERE @rate_interval::bigint IS NOT NULL
+                   AND name = @queue),
+                (SELECT extract(epoch FROM min(tat) - now())::float8
+                        - (@key_rate_burst::int - 1) * @key_rate_interval::bigint / 1e6::float8
+                 FROM {rateLimit}
+                 WHERE @key_rate_interval::bigint IS NOT NULL
+                   AND queue = @queue
+                   AND tat > now() + interval '1 microsecond' * ((@key_rate_burst::int - 1) * @key_rate_interval::bigint))
+            """;
+
+        // A row whose tat has passed allows a full burst, exactly as no row does.
+        RateLimitDeleteExpired = $"""
+            DELETE FROM {rateLimit}
+            WHERE (queue, partition_key) IN (SELECT queue, partition_key FROM {rateLimit} WHERE tat < now() LIMIT @max)
+              -- Rechecked against a row a fetch advanced meanwhile.
+              AND tat < now()
             """;
 
         IsRunningAttempt = $"SELECT EXISTS (SELECT 1 FROM {job} WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at)";
@@ -998,6 +1077,10 @@ internal sealed class OxbowSql
     public string QueueLock { get; }
 
     public string GetAvailableLimited { get; }
+
+    public string RateLimitWait { get; }
+
+    public string RateLimitDeleteExpired { get; }
 
     public string IsRunningAttempt { get; }
 

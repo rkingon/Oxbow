@@ -29,8 +29,11 @@ internal sealed class Producer(
     private readonly ConcurrentDictionary<long, DateTimeOffset> _pendingCancels = new();
     private volatile bool _paused;
 
-    private readonly ConcurrencyLimit? _limit =
-        queueOptions.ConcurrencyLimit is { Global: not null } or { Local: not null } ? queueOptions.ConcurrencyLimit : null;
+    private readonly FetchLimits? _limits = FetchLimits.For(queueOptions);
+
+    // When the queue's rate limit next allows a start, as of the last fetch; no fetch before then can start anything.
+    // Only the fetch loop touches it.
+    private DateTimeOffset _throttledUntil = DateTimeOffset.MinValue;
 
     // Running jobs per partition key, held until each outcome is written, so this node never counts fewer jobs for
     // a key than the database does. Guarded by itself.
@@ -90,6 +93,10 @@ internal sealed class Producer(
             EveryAsync(CancelPollInterval, PollCancellationsAsync, pollSource.Token),
             EveryAsync(QueueRefreshInterval, async ct => _paused = await UpsertQueueAsync(ct).ConfigureAwait(false), pollSource.Token));
 
+        using var rateTimer = _limits is { Rate: not null } or { PartitionRate: not null }
+            ? timeProvider.CreateTimer(_ => TriggerFetch(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan)
+            : null;
+
         TriggerFetch();
         var lastFetch = DateTimeOffset.MinValue;
         try
@@ -97,10 +104,23 @@ internal sealed class Producer(
             while (true)
             {
                 await _wake.Reader.ReadAsync(fetchToken).ConfigureAwait(false);
-                var sinceLastFetch = timeProvider.GetUtcNow() - lastFetch;
-                if (sinceLastFetch < runtime.Options.FetchCooldown)
+                if (_throttledUntil != DateTimeOffset.MinValue)
                 {
-                    await Task.Delay(runtime.Options.FetchCooldown - sinceLastFetch, timeProvider, fetchToken).ConfigureAwait(false);
+                    // Fetch the moment the rate limit allows, not a cooldown later: rates above 1 / FetchCooldown
+                    // depend on it, and wakes before then would find nothing to start.
+                    var untilAllowed = _throttledUntil - timeProvider.GetUtcNow();
+                    if (untilAllowed > TimeSpan.Zero)
+                    {
+                        await Task.Delay(untilAllowed, timeProvider, fetchToken).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    var sinceLastFetch = timeProvider.GetUtcNow() - lastFetch;
+                    if (sinceLastFetch < runtime.Options.FetchCooldown)
+                    {
+                        await Task.Delay(runtime.Options.FetchCooldown - sinceLastFetch, timeProvider, fetchToken).ConfigureAwait(false);
+                    }
                 }
 
                 var slots = queueOptions.MaxWorkers - _active.Count;
@@ -113,9 +133,16 @@ internal sealed class Producer(
                 List<JobRow> jobs;
                 try
                 {
-                    jobs = _limit is null
-                        ? await FetchAsync(slots, fetchToken).ConfigureAwait(false)
-                        : await FetchLimitedAsync(_limit, slots, fetchToken).ConfigureAwait(false);
+                    if (_limits is null)
+                    {
+                        jobs = await FetchAsync(slots, fetchToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var fetch = await FetchLimitedAsync(_limits, slots, fetchToken).ConfigureAwait(false);
+                        jobs = fetch.Jobs;
+                        ScheduleRateWake(rateTimer, fetch);
+                    }
                 }
                 catch (Exception ex) when (!fetchToken.IsCancellationRequested)
                 {
@@ -131,7 +158,7 @@ internal sealed class Producer(
 
                 // A short limited fetch may have dropped jobs of keys that had room for only some of them; with those
                 // keys now full, the next fetch scans past them.
-                if (_limit is not null && jobs.Count > 0 && jobs.Count < slots)
+                if (_limits is not null && jobs.Count > 0 && jobs.Count < slots)
                 {
                     TriggerFetch();
                 }
@@ -145,13 +172,33 @@ internal sealed class Producer(
         await polls.ConfigureAwait(false);
     }
 
+    private void ScheduleRateWake(ITimer? timer, LimitedFetch fetch)
+    {
+        _throttledUntil = DateTimeOffset.MinValue;
+        if (timer is null)
+        {
+            return;
+        }
+
+        // The waits are measured from the fetch's now(), which predates this, so the wake is never early.
+        if (fetch.RateWait > TimeSpan.Zero)
+        {
+            _throttledUntil = timeProvider.GetUtcNow() + fetch.RateWait.Value;
+            timer.Change(fetch.RateWait.Value, Timeout.InfiniteTimeSpan);
+        }
+        else if (fetch.PartitionRateWait > TimeSpan.Zero)
+        {
+            timer.Change(fetch.PartitionRateWait.Value, Timeout.InfiniteTimeSpan);
+        }
+    }
+
     private TimeSpan SettingsPollInterval => runtime.Options.PollOnly ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(30);
 
     private TimeSpan CancelPollInterval => runtime.Options.PollOnly ? TimeSpan.FromSeconds(2) : TimeSpan.FromMinutes(1);
 
     private void Start(JobRow row, CancellationToken workToken)
     {
-        var key = _limit is null ? null : row.PartitionKey;
+        var key = _limits?.Concurrency is null ? null : row.PartitionKey;
         if (key is not null)
         {
             lock (_keyRunning)
@@ -249,7 +296,7 @@ internal sealed class Producer(
         }
     }
 
-    private async Task<List<JobRow>> FetchLimitedAsync(ConcurrencyLimit limit, int max, CancellationToken cancellationToken)
+    private async Task<LimitedFetch> FetchLimitedAsync(FetchLimits limits, int max, CancellationToken cancellationToken)
     {
         string[] keys;
         int[] running;
@@ -263,24 +310,27 @@ internal sealed class Producer(
         var batch = runtime.DataSource.CreateBatch();
         await using (batch.ConfigureAwait(false))
         {
-            return await FetchLimitedAsync(batch, runtime.Sql, queue, limit, max, runtime.ClientId, keys, running, cancellationToken)
+            return await FetchLimitedAsync(batch, runtime.Sql, queue, limits, max, runtime.ClientId, keys, running, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
 
-    /// <summary>Adds the queue lock (with a global limit) and the limited fetch to <paramref name="batch"/>, and runs it.</summary>
-    internal static async Task<List<JobRow>> FetchLimitedAsync(
+    /// <summary>
+    /// Adds the queue lock (with a global or rate limit), the limited fetch and, with a rate limit, the wait query to
+    /// <paramref name="batch"/>, and runs it.
+    /// </summary>
+    internal static async Task<LimitedFetch> FetchLimitedAsync(
         NpgsqlBatch batch,
         OxbowSql sql,
         string queue,
-        ConcurrencyLimit limit,
+        FetchLimits limits,
         int max,
         string clientId,
         string[] localKeys,
         int[] localRunning,
         CancellationToken cancellationToken)
     {
-        if (limit.Global is not null)
+        if (limits.Serialized)
         {
             var queueLock = new NpgsqlBatchCommand(sql.QueueLock);
             queueLock.Parameters.AddWithValue("queue", queue);
@@ -293,13 +343,24 @@ internal sealed class Producer(
         p.AddWithValue("max", max);
         p.AddWithValue("scan", max * LimitedScanFactor);
         p.AddWithValue("client_id", clientId);
-        p.Add(new NpgsqlParameter("global_limit", NpgsqlDbType.Integer) { Value = (object?)limit.Global ?? DBNull.Value });
-        p.Add(new NpgsqlParameter("local_limit", NpgsqlDbType.Integer) { Value = (object?)limit.Local ?? DBNull.Value });
+        p.Add(NullableInt("global_limit", limits.Concurrency?.Global));
+        p.Add(NullableInt("local_limit", limits.Concurrency?.Local));
         p.Add(OxbowClient.TextArray("local_keys", localKeys));
         p.Add(new NpgsqlParameter<int[]>("local_running", localRunning));
+        AddRateParameters(p, limits);
         batch.BatchCommands.Add(fetch);
 
+        var rated = limits.Rate is not null || limits.PartitionRate is not null;
+        if (rated)
+        {
+            var wait = new NpgsqlBatchCommand(sql.RateLimitWait);
+            wait.Parameters.AddWithValue("queue", queue);
+            AddRateParameters(wait.Parameters, limits);
+            batch.BatchCommands.Add(wait);
+        }
+
         var rows = new List<JobRow>();
+        TimeSpan? rateWait = null, partitionRateWait = null;
         var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         await using (reader.ConfigureAwait(false))
         {
@@ -307,10 +368,31 @@ internal sealed class Producer(
             {
                 rows.Add(JobRowReader.Read(reader));
             }
+
+            if (rated && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false)
+                && await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rateWait = reader.IsDBNull(0) ? null : TimeSpan.FromSeconds(reader.GetDouble(0));
+                partitionRateWait = reader.IsDBNull(1) ? null : TimeSpan.FromSeconds(reader.GetDouble(1));
+            }
         }
 
-        return rows;
+        return new LimitedFetch(rows, rateWait, partitionRateWait);
     }
+
+    private static void AddRateParameters(NpgsqlParameterCollection p, FetchLimits limits)
+    {
+        p.Add(NullableLong("rate_interval", limits.Rate?.EmissionIntervalMicroseconds));
+        p.Add(NullableInt("rate_burst", limits.Rate?.Burst));
+        p.Add(NullableLong("key_rate_interval", limits.PartitionRate?.EmissionIntervalMicroseconds));
+        p.Add(NullableInt("key_rate_burst", limits.PartitionRate?.Burst));
+    }
+
+    private static NpgsqlParameter NullableInt(string name, int? value) =>
+        new(name, NpgsqlDbType.Integer) { Value = (object?)value ?? DBNull.Value };
+
+    private static NpgsqlParameter NullableLong(string name, long? value) =>
+        new(name, NpgsqlDbType.Bigint) { Value = (object?)value ?? DBNull.Value };
 
     private async Task<bool> UpsertQueueAsync(CancellationToken cancellationToken)
     {
@@ -409,3 +491,23 @@ internal sealed class Producer(
         }
     }
 }
+
+/// <summary>The limits a queue's fetch enforces; null for a queue with none.</summary>
+internal sealed record FetchLimits(ConcurrencyLimit? Concurrency, RateLimit? Rate = null, RateLimit? PartitionRate = null)
+{
+    /// <summary>Whether fetches must be serialized behind the queue lock: limits that span nodes need it.</summary>
+    public bool Serialized => Concurrency?.Global is not null || Rate is not null || PartitionRate is not null;
+
+    public static FetchLimits? For(QueueOptions options)
+    {
+        var concurrency = options.ConcurrencyLimit is { Global: not null } or { Local: not null } ? options.ConcurrencyLimit : null;
+        return concurrency is null && options.RateLimit is null && options.PartitionRateLimit is null
+            ? null
+            : new FetchLimits(concurrency, options.RateLimit, options.PartitionRateLimit);
+    }
+}
+
+/// <summary>
+/// A limited fetch's jobs, and how long until the queue's and the first throttled key's rate limits next allow a start.
+/// </summary>
+internal sealed record LimitedFetch(List<JobRow> Jobs, TimeSpan? RateWait, TimeSpan? PartitionRateWait);

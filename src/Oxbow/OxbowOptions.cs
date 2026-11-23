@@ -144,4 +144,16 @@ public sealed class QueueOptions
     /// Per-key limits on running jobs, keyed by <see cref="InsertOptions.PartitionKey"/>. Default: unlimited.
     /// </summary>
     public ConcurrencyLimit? ConcurrencyLimit { get; set; }
+
+    /// <summary>
+    /// Caps job starts over time for the whole queue, across every node working it. Configure the same value on every
+    /// node. Default: unlimited.
+    /// </summary>
+    public RateLimit? RateLimit { get; set; }
+
+    /// <summary>
+    /// Caps job starts over time per <see cref="InsertOptions.PartitionKey"/>, across every node working the queue. Jobs
+    /// without a key aren't limited by it. Default: unlimited.
+    /// </summary>
+    public RateLimit? PartitionRateLimit { get; set; }
 }

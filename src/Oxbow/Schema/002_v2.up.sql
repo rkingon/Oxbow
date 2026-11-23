@@ -76,4 +76,17 @@ ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN partition_key text
 CREATE INDEX {{prefix}}job_partition_idx ON {{schema}}.{{prefix}}job USING btree (queue, partition_key)
     WHERE state = 'running' AND partition_key IS NOT NULL;
 
+-- rate limiting
+
+-- The queue's GCRA theoretical arrival time: a start is allowed once it is within the burst tolerance of now().
+ALTER TABLE {{schema}}.{{prefix}}queue ADD COLUMN rate_limit_tat timestamptz;
+
+-- The same, per (queue, partition key). A row whose tat has passed is the same as no row, so maintenance deletes them.
+CREATE TABLE {{schema}}.{{prefix}}rate_limit (
+    queue text NOT NULL,
+    partition_key text NOT NULL,
+    tat timestamptz NOT NULL,
+    PRIMARY KEY (queue, partition_key)
+);
+
 INSERT INTO {{schema}}.{{prefix}}migration (version) VALUES (2);

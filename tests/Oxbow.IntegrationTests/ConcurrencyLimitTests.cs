@@ -43,7 +43,7 @@ public sealed class ConcurrencyLimitTests(PostgresFixture database)
         var prefix = await database.CreateSchemaAsync();
         await using var app = await TestApp.StartAsync(database, prefix);
         var sql = new OxbowSql("public", prefix);
-        var limit = new ConcurrencyLimit { Global = 1 };
+        var limit = new FetchLimits(new ConcurrencyLimit { Global = 1 });
         var low = await app.Client.InsertAsync(new LimitedArgs("k"), new InsertOptions { Priority = 2 });
 
         await using var first = await app.DataSource.OpenConnectionAsync();
@@ -51,7 +51,7 @@ public sealed class ConcurrencyLimitTests(PostgresFixture database)
         await using (var batch = new NpgsqlBatch(first, holder))
         {
             var taken = await Producer.FetchLimitedAsync(batch, sql, "default", limit, 10, "first", [], [], default);
-            Assert.Equal(low.Job.Id, Assert.Single(taken).Id);
+            Assert.Equal(low.Job.Id, Assert.Single(taken.Jobs).Id);
         }
 
         // Sorts ahead of the job just taken, so a fetch that didn't wait for the holder's commit would see room for it.
@@ -64,7 +64,7 @@ public sealed class ConcurrencyLimitTests(PostgresFixture database)
         Assert.False(waiting.IsCompleted);
 
         await holder.CommitAsync();
-        Assert.Empty(await waiting);
+        Assert.Empty((await waiting).Jobs);
         Assert.Equal(JobState.Available, (await app.Client.GetAsync(high.Job.Id))!.State);
     }
 

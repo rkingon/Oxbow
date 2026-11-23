@@ -1,5 +1,9 @@
 DELETE FROM {{schema}}.{{prefix}}migration WHERE version = 2;
 
+-- rate limiting
+DROP TABLE {{schema}}.{{prefix}}rate_limit;
+ALTER TABLE {{schema}}.{{prefix}}queue DROP COLUMN rate_limit_tat;
+
 -- partitioned concurrency limits
 DROP INDEX {{schema}}.{{prefix}}job_partition_idx;
 ALTER TABLE {{schema}}.{{prefix}}job DROP COLUMN partition_key;

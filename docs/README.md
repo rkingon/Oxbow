@@ -13,6 +13,7 @@
 - [Batches](batches.md): callbacks when a group of jobs finishes
 - [Queues](queues.md): concurrency, pause and resume
 - [Concurrency limits](concurrency-limits.md): per-key limits, local and global
+- [Rate limiting](rate-limiting.md): job starts per period, per queue or per key, across nodes
 - [Middleware](middleware.md)
 - [Args encryption](encryption.md): at rest, on ASP.NET Core Data Protection
 - [Maintenance and leader election](maintenance.md)
