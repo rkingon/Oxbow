@@ -9,7 +9,7 @@ namespace Oxbow;
 public static class OxbowSchema
 {
     /// <summary>The schema version this release requires.</summary>
-    public const int LatestVersion = 1;
+    public const int LatestVersion = 2;
 
     /// <summary>
     /// The SQL to move the schema from <paramref name="fromVersion"/> to <paramref name="toVersion"/>, one script per
@@ -51,21 +51,36 @@ public static class OxbowSchema
         return migrations;
     }
 
-    /// <summary>The grants a least-privilege runtime role needs, and nothing more.</summary>
+    /// <summary>The grants a least-privilege runtime role needs on the latest schema, and nothing more.</summary>
     /// <param name="role">The role workers and clients connect as.</param>
     /// <param name="schema">The Postgres schema.</param>
     /// <param name="tablePrefix">The prefix on every object Oxbow creates.</param>
     /// <returns>The grant script.</returns>
-    public static string GetGrants(string role, string schema = "public", string tablePrefix = "oxbow_")
+    public static string GetGrants(string role, string schema = "public", string tablePrefix = "oxbow_") =>
+        string.Concat(Enumerable.Range(1, LatestVersion).Select(v => GetGrants(role, v, schema, tablePrefix)));
+
+    /// <summary>
+    /// The grants on the objects schema <paramref name="version"/> adds, for the migration that installs it. Empty when
+    /// the version adds nothing the runtime role needs.
+    /// </summary>
+    /// <param name="role">The role workers and clients connect as.</param>
+    /// <param name="version">The schema version.</param>
+    /// <param name="schema">The Postgres schema.</param>
+    /// <param name="tablePrefix">The prefix on every object Oxbow creates.</param>
+    /// <returns>The grant script.</returns>
+    public static string GetGrants(string role, int version, string schema = "public", string tablePrefix = "oxbow_")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        ArgumentOutOfRangeException.ThrowIfLessThan(version, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(version, LatestVersion);
         Identifiers.Validate(schema, tablePrefix);
-        return Render("grants.sql", schema, tablePrefix).Replace("{{role}}", Identifiers.Quote(role), StringComparison.Ordinal);
+        return Render(ScriptName(version, "grants"), schema, tablePrefix).Replace("{{role}}", Identifiers.Quote(role), StringComparison.Ordinal);
     }
 
     private static string ScriptName(int version, string direction) => version switch
     {
         1 => $"001_initial.{direction}.sql",
+        2 => $"002_v2.{direction}.sql",
         _ => throw new ArgumentOutOfRangeException(nameof(version), version.ToString(CultureInfo.InvariantCulture)),
     };
 

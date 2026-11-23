@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and
+  grant `GetGrants(role, version: 2)` before deploying. The previous release keeps working against version 2.
+- Grants are versioned: `OxbowSchema.GetGrants(role, version)` returns the grants for the objects one version adds.
+  `GetGrants(role)` still returns the full set.
+- **Breaking (EF):** `AddOxbowSchema`, `RemoveOxbowSchema` and `GrantOxbowAccess` take a required `version`. A default
+  of the latest version made existing migrations replay different SQL after a package upgrade. Pass `version: 1` in
+  your existing Oxbow migration.
+
 ## [0.1.0-alpha.3] - 2026-11-23
 
 ### Fixed

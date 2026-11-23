@@ -18,10 +18,10 @@ public sealed class CliTests(PostgresFixture database)
         const string prefix = "cli_";
         var up = await RunAsync("migrate", "--connection", database.OwnerConnectionString, "--prefix", prefix);
         Assert.Equal(0, up.ExitCode);
-        Assert.Contains("Now at version 1", up.Output, StringComparison.Ordinal);
+        Assert.Contains($"Now at version {OxbowSchema.LatestVersion}", up.Output, StringComparison.Ordinal);
 
         var again = await RunAsync("migrate", "--connection", database.OwnerConnectionString, "--prefix", prefix);
-        Assert.Contains("Already at version 1", again.Output, StringComparison.Ordinal);
+        Assert.Contains($"Already at version {OxbowSchema.LatestVersion}", again.Output, StringComparison.Ordinal);
 
         var down = await RunAsync("migrate", "--connection", database.OwnerConnectionString, "--prefix", prefix, "--to", "0");
         Assert.Equal(0, down.ExitCode);

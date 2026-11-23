@@ -92,10 +92,15 @@ missing versions and how to get their SQL. It never applies them.
 - `src/Oxbow/Schema/NNN_name.up.sql` and `.down.sql` are embedded resources with `{{schema}}` and `{{prefix}}` tokens.
 - `OxbowSchema.GetMigrations(int fromVersion, int toVersion, OxbowSchemaOptions? options)` returns the rendered scripts
   as `IReadOnlyList<OxbowMigration>` (version, direction, SQL). A downgrade is just `from > to`.
-- `OxbowSchema.GetGrants(string role, OxbowSchemaOptions? options)` returns the least-privilege grant script.
-- EF: `migrationBuilder.AddOxbowSchema(version: 1)` in `Up` and `migrationBuilder.RemoveOxbowSchema(version: 1)` in
-  `Down`, so each Oxbow schema version gets its own EF migration in the consumer's history.
-  `migrationBuilder.GrantOxbowAccess("app_role")` covers the grants.
+- `src/Oxbow/Schema/NNN_name.grants.sql` holds the grants on the objects version NNN adds (possibly none).
+  `OxbowSchema.GetGrants(role, version)` renders one version's; `GetGrants(role)` renders all of them, for the latest
+  schema.
+- EF: `migrationBuilder.AddOxbowSchema(version: N)` and `GrantOxbowAccess(role, version: N)` in `Up`,
+  `RemoveOxbowSchema(version: N)` in `Down`, so each Oxbow schema version gets its own EF migration in the consumer's
+  history. Versions are required, never defaulted to the latest: a migration must replay the same SQL after a package
+  upgrade, and a version's grants must not name objects a later version adds.
+- A schema version's scripts may change until a release ships it. A database that ran an unreleased version's script
+  has to be recreated or reconciled by hand.
 - CLI: `oxbow sql --from 0 --to 1 [--schema s --prefix p]` prints the SQL, `oxbow grants --role r` prints the grants, and
   `oxbow migrate --connection … [--to N]` applies the scripts and their marker rows in one transaction.
 

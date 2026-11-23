@@ -80,12 +80,12 @@ public sealed class EntityFrameworkCoreTests(PostgresFixture database)
     public void The_migration_helpers_emit_the_schema_sql()
     {
         var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
-        builder.AddOxbowSchema(1, tablePrefix: "ef_").GrantOxbowAccess("app", tablePrefix: "ef_");
+        builder.AddOxbowSchema(1, tablePrefix: "ef_").GrantOxbowAccess("app", 1, tablePrefix: "ef_");
         builder.RemoveOxbowSchema(1, tablePrefix: "ef_");
 
         var sql = builder.Operations.Cast<SqlOperation>().Select(o => o.Sql).ToList();
         Assert.Equal(OxbowSchema.GetMigrations(0, 1, tablePrefix: "ef_")[0].Sql, sql[0]);
-        Assert.Equal(OxbowSchema.GetGrants("app", tablePrefix: "ef_"), sql[1]);
+        Assert.Equal(OxbowSchema.GetGrants("app", 1, tablePrefix: "ef_"), sql[1]);
         Assert.Equal(OxbowSchema.GetMigrations(1, 0, tablePrefix: "ef_")[0].Sql, sql[2]);
     }
 }
