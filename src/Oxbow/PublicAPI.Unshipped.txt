@@ -279,3 +279,28 @@ Oxbow.JobRow.SequenceKey.get -> string?
 Oxbow.JobRow.SequenceKey.init -> void
 Oxbow.JobFilter.SequenceKey.get -> string?
 Oxbow.JobFilter.SequenceKey.init -> void
+Oxbow.PartitionKeyAttribute
+Oxbow.PartitionKeyAttribute.PartitionKeyAttribute() -> void
+Oxbow.ConcurrencyLimit
+Oxbow.ConcurrencyLimit.ConcurrencyLimit() -> void
+Oxbow.ConcurrencyLimit.Global.get -> int?
+Oxbow.ConcurrencyLimit.Global.init -> void
+Oxbow.ConcurrencyLimit.Local.get -> int?
+Oxbow.ConcurrencyLimit.Local.init -> void
+Oxbow.InsertOptions.PartitionKey.get -> string?
+Oxbow.InsertOptions.PartitionKey.init -> void
+Oxbow.JobInsertParams.PartitionKey.get -> string?
+Oxbow.JobInsertParams.PartitionKey.set -> void
+Oxbow.QueueOptions.ConcurrencyLimit.get -> Oxbow.ConcurrencyLimit?
+Oxbow.QueueOptions.ConcurrencyLimit.set -> void
+Oxbow.ConcurrencyLimit.<Clone>$() -> Oxbow.ConcurrencyLimit!
+Oxbow.ConcurrencyLimit.Equals(Oxbow.ConcurrencyLimit? other) -> bool
+override Oxbow.ConcurrencyLimit.Equals(object? obj) -> bool
+override Oxbow.ConcurrencyLimit.GetHashCode() -> int
+override Oxbow.ConcurrencyLimit.ToString() -> string!
+static Oxbow.ConcurrencyLimit.operator !=(Oxbow.ConcurrencyLimit? left, Oxbow.ConcurrencyLimit? right) -> bool
+static Oxbow.ConcurrencyLimit.operator ==(Oxbow.ConcurrencyLimit? left, Oxbow.ConcurrencyLimit? right) -> bool
+Oxbow.JobFilter.PartitionKey.get -> string?
+Oxbow.JobFilter.PartitionKey.init -> void
+Oxbow.JobRow.PartitionKey.get -> string?
+Oxbow.JobRow.PartitionKey.init -> void

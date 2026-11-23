@@ -43,6 +43,11 @@ All notable changes to this project are documented here. The format follows
   insert order. A job that ran and ended discarded or cancelled halts its sequence until it's retried or deleted, unless
   `InsertOptions.SequenceContinueOn` says to move past it. `JobRow.SequenceKey` and `JobFilter.SequenceKey` read and
   target a sequence. Needs schema version 2 and this release on the leader.
+- Concurrency limits: `QueueOptions.ConcurrencyLimit = new() { Global = 5, Local = 2 }` caps running jobs per
+  partition key, across nodes and per node. The key comes from `InsertOptions.PartitionKey`, the args' defaults,
+  `[PartitionKey]` properties, or insert middleware (`JobInsertParams.PartitionKey`). Over-limit jobs stay
+  `available` without spending an attempt. The key is on `JobRow.PartitionKey`, and `JobFilter.PartitionKey` lists and
+  bulk-manages one partition. Schema version 2 adds `{prefix}job.partition_key`.
 
 ### Changed
 

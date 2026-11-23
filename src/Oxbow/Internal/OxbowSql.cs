@@ -26,7 +26,7 @@ internal sealed class OxbowSql
 
         InsertMany = $"""
             INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states, batch_id,
-                sequence_key, sequence_continue_on)
+                sequence_key, sequence_continue_on, partition_key)
             SELECT
                 i.args::jsonb,
                 i.kind,
@@ -41,13 +41,14 @@ internal sealed class OxbowSql
                 nullif(i.unique_states, 0)::bit(8),
                 @batch_id::bigint,
                 i.sequence_key,
-                i.sequence_continue_on
+                i.sequence_continue_on,
+                i.partition_key
             FROM unnest(
                 @args::text[], @kind::text[], @max_attempts::smallint[], @metadata::text[], @priority::smallint[],
                 @queue::text[], @scheduled_at::timestamptz[], @state::text[], @tags::text[], @unique_key::bytea[],
-                @unique_states::int[], @sequence_key::text[], @sequence_continue_on::smallint[]
+                @unique_states::int[], @sequence_key::text[], @sequence_continue_on::smallint[], @partition_key::text[]
             ) AS i(args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
-                sequence_key, sequence_continue_on)
+                sequence_key, sequence_continue_on, partition_key)
             ON CONFLICT (unique_key)
                 WHERE unique_key IS NOT NULL
                   AND unique_states IS NOT NULL
@@ -57,7 +58,7 @@ internal sealed class OxbowSql
             RETURNING {Columns(prefix + "job")}, (xmax <> 0) AS unique_skipped_as_duplicate
             """;
 
-        CopyJobs = $"COPY {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, sequence_key, sequence_continue_on) FROM STDIN (FORMAT BINARY)";
+        CopyJobs = $"COPY {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, sequence_key, sequence_continue_on, partition_key) FROM STDIN (FORMAT BINARY)";
         StateTypeName = state;
 
         Notify = "SELECT pg_notify(@channel, payload) FROM unnest(@payloads::text[]) AS payload";
@@ -72,6 +73,86 @@ internal sealed class OxbowSql
                 ORDER BY priority, scheduled_at, id
                 LIMIT @max
                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE {job} AS j
+            SET state = 'running',
+                attempt = j.attempt + 1,
+                attempted_at = now(),
+                attempted_by = array_append(
+                    CASE WHEN array_length(j.attempted_by, 1) >= 100
+                        THEN j.attempted_by[array_length(j.attempted_by, 1) - 98:]
+                        ELSE j.attempted_by
+                    END,
+                    @client_id)
+            FROM locked
+            WHERE j.id = locked.id
+            RETURNING {Columns("j")}
+            """;
+
+        // Serializes fetches for a queue with a global limit. DO UPDATE locks the conflicting row even when its WHERE is
+        // false, so this creates the row if it's missing but never writes a new version of it. It must be a statement of
+        // its own: a statement's snapshot predates any lock it waits for, so a count taken in the same statement would
+        // miss the jobs the previous holder just started.
+        QueueLock = $"""
+            INSERT INTO {queue} (name, updated_at)
+            VALUES (@queue, now())
+            ON CONFLICT (name) DO UPDATE SET updated_at = now() WHERE false
+            """;
+
+        // GetAvailable for a queue with a concurrency limit. A key's room is the least of the global limit minus its
+        // running jobs and the local limit minus this node's (sent by the producer). Keys without room are filtered out
+        // before the scan's LIMIT, so a saturated key's backlog can't starve the others; the window then keeps at most
+        // `room` jobs per key.
+        GetAvailableLimited = $"""
+            WITH running AS (
+                SELECT partition_key, count(*)::int AS n
+                FROM {job}
+                WHERE @global_limit::int IS NOT NULL
+                  AND state = 'running'
+                  AND queue = @queue
+                  AND partition_key IS NOT NULL
+                GROUP BY partition_key
+            ),
+            local_running AS (
+                SELECT * FROM unnest(@local_keys::text[], @local_running::int[]) AS l(partition_key, n)
+            ),
+            room AS (
+                SELECT partition_key,
+                    least(@global_limit::int - coalesce(r.n, 0), @local_limit::int - coalesce(l.n, 0)) AS room
+                FROM running AS r
+                FULL JOIN local_running AS l USING (partition_key)
+            ),
+            candidates AS (
+                SELECT id, partition_key, priority, scheduled_at
+                FROM {job}
+                WHERE state = 'available'
+                  AND queue = @queue
+                  AND scheduled_at <= now()
+                  AND (partition_key IS NULL
+                       OR partition_key <> ALL (ARRAY(SELECT partition_key FROM room WHERE room <= 0)))
+                ORDER BY priority, scheduled_at, id
+                LIMIT @scan
+            ),
+            ranked AS (
+                SELECT id, partition_key, priority, scheduled_at,
+                    row_number() OVER (PARTITION BY partition_key ORDER BY priority, scheduled_at, id) AS rank
+                FROM candidates
+            ),
+            eligible AS (
+                SELECT ranked.id
+                FROM ranked
+                LEFT JOIN room USING (partition_key)
+                WHERE ranked.partition_key IS NULL
+                   OR ranked.rank <= coalesce(room.room, least(@global_limit::int, @local_limit::int))
+                ORDER BY ranked.priority, ranked.scheduled_at, ranked.id
+                LIMIT @max
+            ),
+            locked AS (
+                SELECT j.id
+                FROM {job} AS j
+                WHERE j.id IN (SELECT id FROM eligible)
+                  AND j.state = 'available'
+                FOR UPDATE OF j SKIP LOCKED
             )
             UPDATE {job} AS j
             SET state = 'running',
@@ -910,6 +991,10 @@ internal sealed class OxbowSql
 
     public string GetAvailable { get; }
 
+    public string QueueLock { get; }
+
+    public string GetAvailableLimited { get; }
+
     public string SetStateIfRunning { get; }
 
     public string Cancel { get; }
@@ -1046,5 +1131,5 @@ internal sealed class OxbowSql
         $"{alias}.id, {alias}.state::text, {alias}.attempt, {alias}.max_attempts, {alias}.attempted_at, {alias}.created_at, " +
         $"{alias}.finalized_at, {alias}.scheduled_at, {alias}.priority, {alias}.args::text, {alias}.attempted_by, " +
         $"{alias}.errors::text[], {alias}.kind, {alias}.metadata::text, {alias}.queue, {alias}.tags::text[], " +
-        $"{alias}.sequence_key";
+        $"{alias}.sequence_key, {alias}.partition_key";
 }

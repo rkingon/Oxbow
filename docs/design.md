@@ -278,7 +278,11 @@ producer needs no locks:
   once the job starts, as in River;
 - pause and resume come from control NOTIFYs plus a 2 s poll of the `{p}queue` row. While paused, the producer doesn't
   fetch, and running jobs finish;
-- on start, the producer upserts its `{p}queue` row (River's `QueueCreateOrSetUpdatedAt`).
+- on start, the producer upserts its `{p}queue` row (River's `QueueCreateOrSetUpdatedAt`);
+- a queue with a `ConcurrencyLimit` fetches with `GetAvailableLimited` instead, which leaves out keys at their limit and
+  takes at most each key's room. The producer sends its running count per key (held until each outcome is written) for
+  the local limit. With a global limit, the fetch runs in one batch after a lock on the queue's `{p}queue` row, as a
+  separate statement so the count's snapshot postdates the lock. See [concurrency limits](concurrency-limits.md).
 
 **Executor.** It creates a scope, resolves `IWorker<TArgs>`, deserializes the args, builds the middleware pipeline, runs
 the worker, maps the outcome to a state update and hands it to the completer. Exceptions are caught, so a worker can

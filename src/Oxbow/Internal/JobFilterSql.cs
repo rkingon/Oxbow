@@ -15,13 +15,14 @@ internal static class JobFilterSql
         && filter.Kinds is null
         && filter.BatchId is null
         && filter.SequenceKey is null
+        && filter.PartitionKey is null
         && (filter.Metadata is null || filter.Metadata.Count == 0)
         && (filter.Tags is null || filter.Tags.Count == 0);
 
     /// <summary>The clause, with its parameters added to <paramref name="parameters"/>.</summary>
     public static string Where(JobFilter filter, string stateTypeName, NpgsqlParameterCollection parameters)
     {
-        var clauses = new List<string>(7);
+        var clauses = new List<string>(8);
         if (filter.States is { } states)
         {
             clauses.Add($"state = ANY(@filter_states::{stateTypeName}[])");
@@ -50,6 +51,12 @@ internal static class JobFilterSql
         {
             clauses.Add("sequence_key = @filter_sequence_key");
             parameters.Add(new NpgsqlParameter("filter_sequence_key", NpgsqlDbType.Text) { Value = sequenceKey });
+        }
+
+        if (filter.PartitionKey is { } partitionKey)
+        {
+            clauses.Add("partition_key = @filter_partition_key");
+            parameters.Add(new NpgsqlParameter("filter_partition_key", NpgsqlDbType.Text) { Value = partitionKey });
         }
 
         if (filter.Metadata is { Count: > 0 } metadata)

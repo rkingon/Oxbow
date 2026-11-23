@@ -1,5 +1,9 @@
 DELETE FROM {{schema}}.{{prefix}}migration WHERE version = 2;
 
+-- partitioned concurrency limits
+DROP INDEX {{schema}}.{{prefix}}job_partition_idx;
+ALTER TABLE {{schema}}.{{prefix}}job DROP COLUMN partition_key;
+
 -- sequences
 -- Version 1 never promotes pending jobs, so release them unordered rather than strand them.
 UPDATE {{schema}}.{{prefix}}job

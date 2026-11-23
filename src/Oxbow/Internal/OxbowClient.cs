@@ -147,6 +147,7 @@ internal sealed partial class OxbowClient(
         foreach (var job in jobs)
         {
             ValidateQueueName(job.Queue, allowWildcard: false);
+            PartitionKeys.Validate(job.PartitionKey);
         }
 
         // COPY can't fall back to the column default per row, so unscheduled jobs take the app's clock.
@@ -171,6 +172,7 @@ internal sealed partial class OxbowClient(
                 await writer.WriteAsync(job.Tags.ToArray(), NpgsqlDbType.Array | NpgsqlDbType.Varchar, cancellationToken).ConfigureAwait(false);
                 await writer.WriteAsync(job.SequenceKey, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
                 await writer.WriteAsync(SequenceContinueOnDb(job), NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.PartitionKey, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
             }
 
             count = (int)await writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
@@ -1021,6 +1023,9 @@ internal sealed partial class OxbowClient(
             throw new ArgumentException($"SequenceContinueOn value {(int)job.SequenceContinueOn} is not valid.", nameof(options));
         }
 
+        job.PartitionKey = options?.PartitionKey ?? argsDefaults?.PartitionKey ?? PartitionKeys.Derive(job.EncodedArgs, typeInfo, protector);
+        PartitionKeys.Validate(job.PartitionKey);
+
         if (protector is not null)
         {
             // Envelope safety on older nodes relies on args being an object: a string-reading converter would accept it.
@@ -1089,6 +1094,7 @@ internal sealed partial class OxbowClient(
         foreach (var job in jobs)
         {
             ValidateQueueName(job.Queue, allowWildcard: false);
+            PartitionKeys.Validate(job.PartitionKey);
         }
 
         var results = new List<InsertResult>(jobs.Count);
@@ -1123,13 +1129,17 @@ internal sealed partial class OxbowClient(
                 command.Parameters.Add(new NpgsqlParameter("on_complete", NpgsqlDbType.Text) { Value = (object?)batch.OnComplete ?? DBNull.Value });
                 command.Parameters.Add(new NpgsqlParameter("on_success", NpgsqlDbType.Text) { Value = (object?)batch.OnSuccess ?? DBNull.Value });
             }
+            command.Parameters.Add(new NpgsqlParameter("partition_key", NpgsqlDbType.Array | NpgsqlDbType.Text)
+            {
+                Value = jobs.Select(j => (object?)j.PartitionKey ?? DBNull.Value).ToArray(),
+            });
 
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    results.Add(new InsertResult(JobRowReader.Read(reader), reader.GetBoolean(17)));
+                    results.Add(new InsertResult(JobRowReader.Read(reader), reader.GetBoolean(18)));
                 }
             }
         }

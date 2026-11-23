@@ -15,6 +15,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Scheduled and periodic (interval or cron) jobs, with run times persisted across failovers and schedules editable at runtime
 - Batches: insert a group of jobs atomically, with callback jobs when it completes or succeeds
 - Named queues with their own concurrency; pause and resume at runtime
+- Concurrency limits per key (per customer, per tenant), on each node and across the fleet
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
 - Heartbeat and progress for long-running jobs
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner

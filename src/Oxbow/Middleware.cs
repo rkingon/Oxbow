@@ -84,7 +84,9 @@ public sealed class JobInsertContext
     public CancellationToken CancellationToken { get; }
 }
 
-/// <summary>One job about to be inserted. Middleware may change its metadata, tags, queue and priority.</summary>
+/// <summary>
+/// One job about to be inserted. Middleware may change its metadata, tags, queue, priority and partition key.
+/// </summary>
 public sealed class JobInsertParams
 {
     internal JobInsertParams(IJobArgs args, string kind)
@@ -116,6 +118,9 @@ public sealed class JobInsertParams
 
     /// <summary>Tags stored with the job.</summary>
     public IList<string> Tags { get; } = [];
+
+    /// <summary>The partition key for the queue's concurrency limit; <see langword="null"/> for none.</summary>
+    public string? PartitionKey { get; set; }
 
     internal string? EncodedArgs { get; set; }
 

@@ -59,6 +59,9 @@ public sealed class JobRow
     /// <summary>The job's sequence key, or <see langword="null"/> if it isn't in a sequence.</summary>
     public string? SequenceKey { get; init; }
 
+    /// <summary>The partition key the queue's <see cref="QueueOptions.ConcurrencyLimit"/> applies to, if any.</summary>
+    public string? PartitionKey { get; init; }
+
     /// <summary>
     /// The last heartbeat (<c>oxbow:heartbeat_at</c> in <see cref="Metadata"/>), from any attempt: compare it with
     /// <see cref="AttemptedAt"/>.

@@ -48,8 +48,6 @@ ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN batch_id bigint;
 
 CREATE INDEX {{prefix}}job_batch_idx ON {{schema}}.{{prefix}}job USING btree (batch_id, state) WHERE batch_id IS NOT NULL;
 
-INSERT INTO {{schema}}.{{prefix}}migration (version) VALUES (2);
-
 -- sequences
 ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN sequence_key text;
 

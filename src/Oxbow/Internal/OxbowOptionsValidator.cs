@@ -27,6 +27,11 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
             {
                 failures.Add($"Queue '{queue}': MaxWorkers must be between 1 and 10,000.");
             }
+
+            if (queueOptions.ConcurrencyLimit is { } limit && (limit.Global < 1 || limit.Local < 1))
+            {
+                failures.Add($"Queue '{queue}': ConcurrencyLimit.Global and Local must be at least 1, or null for no limit.");
+            }
         }
 
         var periodicNames = new HashSet<string>(StringComparer.Ordinal);
