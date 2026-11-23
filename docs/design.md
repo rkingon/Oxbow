@@ -204,7 +204,8 @@ builder.Services.AddOxbow(o =>
 | `InsertManyAsync(IEnumerable<InsertManyItem>, ct)` and the connection/transaction overload | Multi-row `INSERT … SELECT unnest(…)` with unique support; returns rows (see bulk insert). |
 | `CancelAsync(id, ct)` | Not started: becomes cancelled immediately. Running: `cancel_attempted_at` is set and a control NOTIFY goes out. Finalized: returned as is. |
 | `RetryAsync(id, ct)`, `DeleteAsync(id, ct)`, `GetAsync(id, ct)` | River semantics. Delete and retry never touch a running job. |
-| `ListAsync(JobListQuery, ct)` | Filters (kinds, queues, states), ascending or descending by ID, keyset cursor. |
+| `ListAsync(JobListQuery, ct)` | Filters (`JobFilter`: kinds, queues, states, metadata containment, tags), ascending or descending by ID, keyset cursor. |
+| `CancelManyAsync(JobFilter, ct)`, `RetryManyAsync(JobFilter, ct)`, `DeleteManyAsync(JobFilter, ct)` | The single-job semantics over every match, 1,000 jobs per statement in ID order, each batch its own transaction. A filter matching everything needs `All = true`. Bulk cancel sends one control NOTIFY per queue per 300 running jobs (`{action:"cancel", queue, job_ids}`). Returns counts. |
 | `PauseQueueAsync(name, ct)`, `ResumeQueueAsync(name, ct)` | Updates the `{p}queue` row and sends a control NOTIFY in one statement; `"*"` means all queues. |
 
 `InsertResult` is `(JobRow Job, bool UniqueSkippedAsDuplicate)`. EF: `client.InsertAsync(dbContext, args, …)` uses
@@ -263,7 +264,7 @@ producer needs no locks:
   increments `attempt` and appends the node ID to `attempted_by` (capped at 100). Queues are the routing boundary: a
   node that shouldn't take some work doesn't run that queue;
 - each job runs on its own task with its own linked `CancellationTokenSource`;
-- cancel requests come in by NOTIFY (`{action:"cancel", job_id, queue}`), with a poll of `cancel_attempted_at` for
+- cancel requests come in by NOTIFY (`{action:"cancel", job_id, queue}`, or `job_ids` from a bulk cancel), with a poll of `cancel_attempted_at` for
   running IDs as backup (every 1 min, or 2 s in poll-only mode). A cancel that arrives mid-fetch is held and applied
   once the job starts, as in River;
 - pause and resume come from control NOTIFYs plus a 2 s poll of the `{p}queue` row. While paused, the producer doesn't

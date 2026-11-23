@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `CancelManyAsync`, `RetryManyAsync` and `DeleteManyAsync` on `IOxbowClient`: the single-job semantics applied to every
+  job matching a filter, in batches. Bulk cancel stops running jobs on every node with batched control NOTIFYs; nodes on
+  0.1.0-alpha.3 pick those up at their cancel poll instead.
+- `JobFilter`, now the base of `JobListQuery`, with `Metadata` (JSON containment) and `Tags` (all of) filters for
+  `ListAsync` and the bulk operations.
+
 ### Changed
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and
@@ -14,6 +22,8 @@ All notable changes to this project are documented here. The format follows
 - **Breaking (EF):** `AddOxbowSchema`, `RemoveOxbowSchema` and `GrantOxbowAccess` take a required `version`. A default
   of the latest version made existing migrations replay different SQL after a package upgrade. Pass `version: 1` in
   your existing Oxbow migration.
+- `JobListQuery` derives from `JobFilter`, which now declares `States`, `Queues` and `Kinds`. Source compatible;
+  recompile code built against an earlier release.
 
 ## [0.1.0-alpha.3] - 2026-11-23
 

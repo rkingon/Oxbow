@@ -18,6 +18,8 @@ internal sealed partial class OxbowClient(
     private readonly IJobInsertMiddleware[] _insertMiddleware = insertMiddleware.ToArray();
     private readonly ConcurrentDictionary<string, long> _lastNotified = new(StringComparer.Ordinal);
 
+    private const int BulkBatchSize = 1_000;
+
     public async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
     {
@@ -206,7 +208,7 @@ internal sealed partial class OxbowClient(
 
     public async Task<JobListResult> ListAsync(JobListQuery query, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(query);
+        JobFilterSql.Validate(query, nameof(query));
         ArgumentOutOfRangeException.ThrowIfLessThan(query.Limit, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(query.Limit, 10_000);
 
@@ -218,18 +220,15 @@ internal sealed partial class OxbowClient(
                 : throw new ArgumentException("The cursor is not valid.", nameof(query));
         }
 
-        var sql = string.Format(
-            CultureInfo.InvariantCulture,
-            runtime.Sql.ListTemplate,
-            query.Descending ? "<" : ">",
-            query.Descending ? "DESC" : "ASC");
-
-        var command = runtime.DataSource.CreateCommand(sql);
+        var command = runtime.DataSource.CreateCommand();
         await using (command.ConfigureAwait(false))
         {
-            command.Parameters.Add(TextArray("states", query.States?.Select(JobStates.ToDb).ToArray()));
-            command.Parameters.Add(TextArray("queues", query.Queues?.ToArray()));
-            command.Parameters.Add(TextArray("kinds", query.Kinds?.ToArray()));
+            command.CommandText = string.Format(
+                CultureInfo.InvariantCulture,
+                runtime.Sql.ListTemplate,
+                JobFilterSql.Where(query, runtime.Sql.StateTypeName, command.Parameters),
+                query.Descending ? "<" : ">",
+                query.Descending ? "DESC" : "ASC");
             command.Parameters.Add(new NpgsqlParameter("after", NpgsqlDbType.Bigint) { Value = (object?)after ?? DBNull.Value });
             command.Parameters.AddWithValue("limit", query.Limit);
             var jobs = await JobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
@@ -237,6 +236,82 @@ internal sealed partial class OxbowClient(
                 ? jobs[^1].Id.ToString(CultureInfo.InvariantCulture)
                 : null;
             return new JobListResult(jobs, nextCursor);
+        }
+    }
+
+    public async Task<CancelManyResult> CancelManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (cancelled, requested) = await ManyAsync(runtime.Sql.CancelManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new CancelManyResult(cancelled, requested);
+    }
+
+    public async Task<long> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
+        (await ManyAsync(runtime.Sql.RetryManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
+
+    public async Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
+        (await ManyAsync(runtime.Sql.DeleteManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
+
+    private async Task<(long Affected, long CancelRequested)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
+    {
+        JobFilterSql.Validate(filter, nameof(filter));
+        if (!filter.All && JobFilterSql.MatchesEverything(filter))
+        {
+            throw new ArgumentException(
+                "The filter matches every job. Set a filter, or set JobFilter.All to act on every job.", nameof(filter));
+        }
+
+        long after = 0, affected = 0, requested = 0;
+        while (true)
+        {
+            var batch = await ManyBatchAsync(template, filter, after, cancellationToken).ConfigureAwait(false);
+            affected += batch.Affected;
+            requested += batch.CancelRequested;
+            if (batch.Scanned < BulkBatchSize)
+            {
+                return (affected, requested);
+            }
+
+            after = batch.LastId;
+        }
+    }
+
+    private async Task<(long Scanned, long LastId, long Affected, long CancelRequested)> ManyBatchAsync(
+        string template,
+        JobFilter filter,
+        long after,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var command = runtime.DataSource.CreateCommand();
+            await using (command.ConfigureAwait(false))
+            {
+                command.CommandText = string.Format(
+                    CultureInfo.InvariantCulture,
+                    template,
+                    JobFilterSql.Where(filter, runtime.Sql.StateTypeName, command.Parameters));
+                command.Parameters.AddWithValue("after", after);
+                command.Parameters.AddWithValue("limit", BulkBatchSize);
+                command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
+                try
+                {
+                    var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                    await using (reader.ConfigureAwait(false))
+                    {
+                        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                        return (
+                            reader.GetInt64(0),
+                            reader.IsDBNull(1) ? after : reader.GetInt64(1),
+                            reader.GetInt64(2),
+                            reader.GetInt64(3));
+                    }
+                }
+
+                // Batches lock in ID order but the completer doesn't, so the two can deadlock on running jobs.
+                catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.DeadlockDetected && attempt < 3)
+                {
+                }
+            }
         }
     }
 
