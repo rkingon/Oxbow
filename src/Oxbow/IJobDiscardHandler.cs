@@ -1,9 +1,10 @@
 namespace Oxbow;
 
 /// <summary>
-/// Called after a job is given up on: discarded or cancelled. Resolved from its own DI scope on the node that wrote the
-/// outcome, after the write. Best-effort: a call is lost if the node dies first, and in rare races may be made twice,
-/// so keep handlers idempotent. Register with <c>AddDiscardHandler&lt;T&gt;()</c>.
+/// Called after the processor discards or cancels a job (not for changes made through the client, such as
+/// <c>CancelAsync</c> on a job that isn't running). Resolved from its own DI scope on the node that wrote the outcome,
+/// after the write. Best-effort: a call may be lost (the node dies first) and may rarely be made twice, so make
+/// handlers idempotent. Register with <c>AddDiscardHandler&lt;T&gt;()</c>.
 /// </summary>
 public interface IJobDiscardHandler
 {

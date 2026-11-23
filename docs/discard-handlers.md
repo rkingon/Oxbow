@@ -27,14 +27,17 @@ services.AddOxbow(...).AddDiscardHandler<AlertOnDiscard>();
   their handlers do too.
 - `context.Job` is read after the write, with the error history, metadata and `finalized_at` as stored. `Exception`
   is the worker's exception when the outcome came from this node's worker, and `null` otherwise.
-- `CancelAsync` on a job that isn't running cancels it on the spot and returns the row; no handler is called, because
-  the caller already knows.
+- **Processor outcomes only.** Handlers see what the processor decided: the executor, the rescuer and the scheduler.
+  Changes made directly through the client, such as `CancelAsync` on a job that isn't running (cancelled on the spot,
+  row returned to the caller), never call handlers.
 - Each job gets a new DI scope. Handlers run in registration order; an exception is logged and the next handler still
   runs.
 - Handlers run on one background loop, never on a worker slot or a maintenance loop, so a slow handler delays other
   handlers but not jobs. Hand long work off (insert a job) rather than doing it inline.
 
 ## Best-effort
+
+**A call may be lost, and may rarely be made twice. Make handlers idempotent.**
 
 Calls are queued in memory on the node that wrote the outcome. They're lost if:
 
@@ -43,5 +46,5 @@ Calls are queued in memory on the node that wrote the outcome. They're lost if:
 - the node can't read the jobs back (the database is down), or a job was deleted first;
 - more than 10,000 calls are waiting.
 
-In rare races a call can also be made twice (a worker reporting a snooze after the rescuer already cancelled its job),
-so make handlers idempotent. For a guarantee, query: `ListAsync` with `States = [Discarded, Cancelled]`.
+A call is repeated in a rare race: a worker reports a snooze after the rescuer has already cancelled its job, and both
+nodes call the handlers. For a guarantee, query instead: `ListAsync` with `States = [Discarded, Cancelled]`.
