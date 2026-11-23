@@ -17,6 +17,7 @@ The leader runs:
 | Batch cleaner | 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callbacks have finished |
 | Periodic enqueuer | on schedule, re-reading every `SchedulerInterval` | Enqueues due periodic jobs from `{prefix}periodic_job` ([periodic jobs](scheduled-and-periodic-jobs.md#periodic)) |
 | Queue depth | 10 s | Publishes `oxbow.queue.depth` |
+| Sequencer | `SchedulerInterval` (5 s), and on insert NOTIFYs | Promotes the next job of each [sequence](sequences.md) with nothing running |
 
 ## The rescuer
 

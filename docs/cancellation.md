@@ -4,7 +4,7 @@
 var job = await oxbow.CancelAsync(jobId);
 ```
 
-- A job that hasn't started (`available`, `scheduled`, `retryable`) becomes `cancelled` at once and never runs.
+- A job that hasn't started (`available`, `scheduled`, `retryable`, `pending`) becomes `cancelled` at once and never runs.
 - A **running** job stays `running`, gets `metadata.cancel_attempted_at`, and its node is told through a NOTIFY on the
   control channel. That node cancels the job's `CancellationToken`. If the worker stops by throwing, the job ends
   `cancelled`; if it finishes anyway, it ends `completed`. The worker decides.

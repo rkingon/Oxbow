@@ -98,12 +98,13 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
             using var timeout = new CancellationTokenSource(Timeout);
             try
             {
-                var states = await ExecuteAsync(batch, timeout.Token).ConfigureAwait(false);
+                var (states, freedSequences) = await ExecuteAsync(batch, timeout.Token).ConfigureAwait(false);
                 foreach (var pending in batch)
                 {
                     pending.Written.TrySetResult(states.TryGetValue(pending.Update.Id, out var state) ? state : null);
                 }
 
+                await PromoteAsync(freedSequences).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (attempt < MaxTries && ex is NpgsqlException or OperationCanceledException)
@@ -125,7 +126,30 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
         }
     }
 
-    private async Task<Dictionary<long, JobState>> ExecuteAsync(List<Pending> batch, CancellationToken cancellationToken)
+    /// <summary>A finished head frees its sequence; promoting here instead of at the leader's sweep keeps the gap short.</summary>
+    private async Task PromoteAsync(HashSet<string> keys)
+    {
+        if (keys.Count == 0)
+        {
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(Timeout);
+        try
+        {
+            await SequencePromoter.PromoteAsync(runtime, keys, timeout.Token).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // The leader's sweep promotes whatever this misses.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            Log.MaintenanceFailed(logger, ex, "sequencer");
+        }
+    }
+
+    private async Task<(Dictionary<long, JobState> States, HashSet<string> FreedSequences)> ExecuteAsync(
+        List<Pending> batch,
+        CancellationToken cancellationToken)
     {
         var updates = batch.Select(p => p.Update).ToArray();
         var placeholderTime = DateTime.UnixEpoch;
@@ -153,16 +177,22 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
             p.Add(OxbowClient.TextArray("state", updates.Select(u => JobStates.ToDb(u.State)).ToArray()));
 
             var states = new Dictionary<long, JobState>(updates.Length);
+            var freedSequences = new HashSet<string>(StringComparer.Ordinal);
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    states[reader.GetInt64(0)] = JobStates.Parse(reader.GetString(1));
+                    var state = JobStates.Parse(reader.GetString(1));
+                    states[reader.GetInt64(0)] = state;
+                    if ((state is JobState.Completed or JobState.Cancelled or JobState.Discarded) && !reader.IsDBNull(4))
+                    {
+                        freedSequences.Add(reader.GetString(4));
+                    }
                 }
             }
 
-            return states;
+            return (states, freedSequences);
         }
     }
 

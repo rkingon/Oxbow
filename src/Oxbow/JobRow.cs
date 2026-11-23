@@ -56,6 +56,9 @@ public sealed class JobRow
     /// <summary>Tags attached at insert.</summary>
     public required IReadOnlyList<string> Tags { get; init; }
 
+    /// <summary>The job's sequence key, or <see langword="null"/> if it isn't in a sequence.</summary>
+    public string? SequenceKey { get; init; }
+
     /// <summary>
     /// The last heartbeat (<c>oxbow:heartbeat_at</c> in <see cref="Metadata"/>), from any attempt: compare it with
     /// <see cref="AttemptedAt"/>.

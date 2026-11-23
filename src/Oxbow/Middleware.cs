@@ -124,4 +124,8 @@ public sealed class JobInsertParams
     internal int UniqueStates { get; set; }
 
     internal bool Scheduled { get; set; }
+
+    internal string? SequenceKey { get; set; }
+
+    internal SequenceContinueOn SequenceContinueOn { get; set; }
 }

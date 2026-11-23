@@ -87,7 +87,7 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
         var command = new NpgsqlCommand(
             $"""
             SELECT id, state::text, attempt, max_attempts, attempted_at, created_at, finalized_at, scheduled_at, priority,
-                   args::text, coalesce(attempted_by, '{"{}"}'), kind, metadata::text, queue, tags::text[]
+                   args::text, coalesce(attempted_by, '{"{}"}'), kind, metadata::text, queue, tags::text[], sequence_key
             FROM {_table}
             WHERE kind = @kind
             ORDER BY id
@@ -121,6 +121,7 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
                         Metadata = JsonDocument.Parse(reader.GetString(12)).RootElement.Clone(),
                         Queue = reader.GetString(13),
                         Tags = reader.GetFieldValue<string[]>(14),
+                        SequenceKey = reader.IsDBNull(15) ? null : reader.GetString(15),
                     };
                     var args = (TArgs)Args(row).Deserialize(json.GetTypeInfo(typeof(TArgs)))!;
                     var job = new Job<TArgs>(row, args);

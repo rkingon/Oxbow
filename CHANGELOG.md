@@ -39,6 +39,10 @@ All notable changes to this project are documented here. The format follows
   `PausePeriodicJobAsync`, `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and
   `ListPeriodicJobsAsync` (paged).
   `AddPeriodicJob(name, …)` names a code-registered job; unnamed ones get a name derived from kind and schedule.
+- Sequences: `InsertOptions.SequenceKey` or `[SequenceKey]` on args runs jobs with the same key one at a time, in
+  insert order. A job that ran and ended discarded or cancelled halts its sequence until it's retried or deleted, unless
+  `InsertOptions.SequenceContinueOn` says to move past it. `JobRow.SequenceKey` and `JobFilter.SequenceKey` read and
+  target a sequence. Needs schema version 2 and this release on the leader.
 
 ### Changed
 

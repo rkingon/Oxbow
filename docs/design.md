@@ -233,6 +233,7 @@ insert ──► available ──fetch──► running ──ok─────�
                                   │  ├─soft shutdown ───────► available (attempt - 1)
                                   │  └─stuck > RescueAfter ─► retryable / discarded / cancelled  (rescuer)
 CancelAsync on available/scheduled/retryable ─► cancelled
+insert with a sequence key ──► pending ──promoter──► available / scheduled  (see Sequences)
 ```
 
 Every completion goes through River's `JobSetStateIfRunningMany`, which only moves a job that is still `running`. If
@@ -318,6 +319,7 @@ which wakes the followers at once.
 | Batch cleaner | every 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callback jobs are finalized or gone. |
 | Periodic enqueuer | due time, at most `SchedulerInterval` | See below. |
 | Queue depth | every 10 s | `count(*)` by queue and state, published as an observable gauge. |
+| Sequencer | every 5 s, and on insert NOTIFYs | Promotes the next `pending` job of each free sequence; see [Sequences](#sequences). |
 
 Maintenance runs as the runtime role, so River's reindexer is left out (`REINDEX` needs ownership).
 
@@ -332,12 +334,28 @@ repeat a run. The enqueuer then sleeps until the next `next_run_at`, for at most
 control channel, sent after every runtime change, wakes it sooner. After downtime it makes one catch-up run per job.
 Run-on-start applies only to a job's first run. See [periodic jobs](scheduled-and-periodic-jobs.md#periodic).
 
+## Sequences
+
+Sequence jobs (`sequence_key` set) are inserted `pending` and only ever become live (`available`, `scheduled`,
+`running`, `retryable`) through promotion: the oldest pending job of a sequence goes `available` (or `scheduled`) when
+the sequence has no live job and no halting job (cancelled or discarded with `attempted_at` set, unless
+`sequence_continue_on` covers that state). A partial unique index on `sequence_key` over the live states makes "at most
+one live job per sequence" a database invariant, so promoters need no lock: one that races on a stale snapshot hits the
+index, and retries on a fresh snapshot (up to three times, then leaves it to the sweep).
+
+Promoters: the completer after writing a batch that finished sequence jobs; the leader on `{s}.{p}sequence` NOTIFYs,
+which inserts send in the inserting transaction (payload: the key); the client after `CancelAsync`, `RetryAsync` or
+`DeleteAsync` (and their bulk forms) on a sequence job; and the leader's sweep every `SchedulerInterval`, which walks the keys with pending
+jobs by a loose index scan. Promotion NOTIFYs the insert channel for each queue that got an `available` job. Halting
+jobs are exempt from the cleaner. `RetryAsync` and `RetryManyAsync` return a finished or pending sequence job to
+`pending`.
+
 ## Inserting
 
 1. Resolve the defaults: options passed in, then the args' `GetInsertOptions()`, then the client's
    (`MaxAttempts` 25, `Priority` 1, `Queue` "default"). Validate priority (1..4), queue name, and tags (≤ 255 chars,
    River's regex).
-2. `ScheduledAt` in the future means state `scheduled`, otherwise `available`.
+2. A sequence key means state `pending`; otherwise `ScheduledAt` in the future means `scheduled`, else `available`.
 3. Unique options: build the key and bitmask. Then, for an encrypted kind, encrypt the args into the envelope. The default states are available, completed, pending, retryable, running
    and scheduled. A custom set must include available, pending, running and scheduled, and `ByPeriod` must be at least 1 s.
 4. The insert middleware pipeline runs over the batch.

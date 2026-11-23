@@ -8,6 +8,7 @@
 - [Managing jobs](managing-jobs.md): list filters, bulk cancel, retry and delete
 - [Cancellation](cancellation.md)
 - [Unique jobs](unique-jobs.md)
+- [Sequences](sequences.md): strict FIFO per key
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)
 - [Batches](batches.md): callbacks when a group of jobs finishes
 - [Queues](queues.md): concurrency, pause and resume
