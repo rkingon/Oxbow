@@ -39,6 +39,7 @@ internal sealed class Maintenance(
                 EveryAsync("rescuer", runtime.Options.RescuerInterval, RescueAsync, cancellationToken),
                 EveryAsync("cleaner", runtime.Options.CleanerInterval, CleanAsync, cancellationToken),
                 EveryAsync("queue-cleaner", QueueCleanerInterval, CleanQueuesAsync, cancellationToken),
+                EveryAsync("rate-limit-cleaner", runtime.Options.CleanerInterval, CleanRateLimitsAsync, cancellationToken),
                 EveryAsync("batch-finisher", runtime.Options.BatchFinisherInterval, FinishBatchesAsync, cancellationToken, runImmediately: true),
                 EveryAsync("batch-cleaner", runtime.Options.CleanerInterval, CleanBatchesAsync, cancellationToken),
                 EveryAsync("queue-depth", DepthInterval, MeasureDepthAsync, cancellationToken, runImmediately: true),
@@ -470,6 +471,22 @@ internal sealed class Maintenance(
         {
             command.Parameters.AddWithValue("horizon", timeProvider.GetUtcNow() - QueueRetention);
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task CleanRateLimitsAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.RateLimitDeleteExpired);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("max", BatchSize);
+                if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) < BatchSize)
+                {
+                    return;
+                }
+            }
         }
     }
 

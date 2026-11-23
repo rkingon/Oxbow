@@ -32,6 +32,9 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
             {
                 failures.Add($"Queue '{queue}': ConcurrencyLimit.Global and Local must be at least 1, or null for no limit.");
             }
+
+            ValidateRateLimit(failures, queue, nameof(queueOptions.RateLimit), queueOptions.RateLimit);
+            ValidateRateLimit(failures, queue, nameof(queueOptions.PartitionRateLimit), queueOptions.PartitionRateLimit);
         }
 
         var periodicNames = new HashSet<string>(StringComparer.Ordinal);
@@ -73,6 +76,31 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    private static void ValidateRateLimit(List<string> failures, string queue, string name, RateLimit? limit)
+    {
+        if (limit is null)
+        {
+            return;
+        }
+
+        if (limit.Limit < 1 || limit.Burst < 1)
+        {
+            failures.Add($"Queue '{queue}': {name}.Limit and Burst must be at least 1.");
+        }
+        else if (limit.Period <= TimeSpan.Zero)
+        {
+            failures.Add($"Queue '{queue}': {name}.Period must be positive.");
+        }
+        else if (limit.Period.Ticks < limit.Limit * 10L)
+        {
+            failures.Add($"Queue '{queue}': {name} must allow at most one start per microsecond.");
+        }
+        else if (limit.Burst > (double)TimeSpan.FromDays(365).Ticks / 10 / limit.EmissionIntervalMicroseconds)
+        {
+            failures.Add($"Queue '{queue}': {name}.Burst times Period / Limit must be at most 365 days.");
+        }
     }
 
     private static void RequirePositive(List<string> failures, string name, TimeSpan value, bool allowZero = false)

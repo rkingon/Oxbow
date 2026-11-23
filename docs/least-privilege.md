@@ -12,6 +12,10 @@ GRANT EXECUTE ON FUNCTION public.oxbow_job_state_in_bitmask(bit(8), public.oxbow
 -- version 2: batches
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_batch TO "app_role";
 GRANT USAGE ON SEQUENCE public.oxbow_batch_id_seq TO "app_role";
+-- version 2: durable periodic jobs
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_periodic_job TO "app_role";
+-- version 2: rate limiting
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_rate_limit TO "app_role";
 ```
 
 LISTEN and NOTIFY need no grant.

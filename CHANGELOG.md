@@ -48,6 +48,11 @@ All notable changes to this project are documented here. The format follows
   `[PartitionKey]` properties, or insert middleware (`JobInsertParams.PartitionKey`). Over-limit jobs stay
   `available` without spending an attempt. The key is on `JobRow.PartitionKey`, and `JobFilter.PartitionKey` lists and
   bulk-manages one partition. Schema version 2 adds `{prefix}job.partition_key`.
+- Rate limiting: `QueueOptions.RateLimit = new(1, TimeSpan.FromSeconds(1))` caps job starts per period across every
+  node working the queue, with an optional `Burst`; `QueueOptions.PartitionRateLimit` does the same per partition key.
+  Enforced at fetch with GCRA under the queue lock, on database time: jobs over the limit stay `available` without
+  spending an attempt, and the producer wakes when the next start is due. Schema version 2 adds
+  `{prefix}queue.rate_limit_tat` and `{prefix}rate_limit`. See [docs/rate-limiting.md](docs/rate-limiting.md).
 
 ### Changed
 

@@ -18,8 +18,11 @@ public sealed class PostgresFixture : IAsyncLifetime
     // Concurrent GRANTs on the same schema race on its catalog row ("tuple concurrently updated").
     private readonly SemaphoreSlim _ddl = new(1, 1);
 
+    // Test classes run in parallel, each with hosts of its own; the default 100 connections isn't enough.
     private readonly PostgreSqlContainer _container =
-        new PostgreSqlBuilder(Environment.GetEnvironmentVariable("OXBOW_POSTGRES_IMAGE") ?? "postgres:17-alpine").Build();
+        new PostgreSqlBuilder(Environment.GetEnvironmentVariable("OXBOW_POSTGRES_IMAGE") ?? "postgres:17-alpine")
+            .WithCommand("-c", "max_connections=300")
+            .Build();
 
     public string OwnerConnectionString => _container.GetConnectionString();
 

@@ -304,3 +304,23 @@ Oxbow.JobFilter.PartitionKey.get -> string?
 Oxbow.JobFilter.PartitionKey.init -> void
 Oxbow.JobRow.PartitionKey.get -> string?
 Oxbow.JobRow.PartitionKey.init -> void
+Oxbow.QueueOptions.PartitionRateLimit.get -> Oxbow.RateLimit?
+Oxbow.QueueOptions.PartitionRateLimit.set -> void
+Oxbow.QueueOptions.RateLimit.get -> Oxbow.RateLimit?
+Oxbow.QueueOptions.RateLimit.set -> void
+Oxbow.RateLimit
+Oxbow.RateLimit.<Clone>$() -> Oxbow.RateLimit!
+Oxbow.RateLimit.Burst.get -> int
+Oxbow.RateLimit.Burst.init -> void
+Oxbow.RateLimit.Deconstruct(out int Limit, out System.TimeSpan Period) -> void
+Oxbow.RateLimit.Equals(Oxbow.RateLimit? other) -> bool
+Oxbow.RateLimit.Limit.get -> int
+Oxbow.RateLimit.Limit.init -> void
+Oxbow.RateLimit.Period.get -> System.TimeSpan
+Oxbow.RateLimit.Period.init -> void
+Oxbow.RateLimit.RateLimit(int Limit, System.TimeSpan Period) -> void
+override Oxbow.RateLimit.Equals(object? obj) -> bool
+override Oxbow.RateLimit.GetHashCode() -> int
+override Oxbow.RateLimit.ToString() -> string!
+static Oxbow.RateLimit.operator !=(Oxbow.RateLimit? left, Oxbow.RateLimit? right) -> bool
+static Oxbow.RateLimit.operator ==(Oxbow.RateLimit? left, Oxbow.RateLimit? right) -> bool

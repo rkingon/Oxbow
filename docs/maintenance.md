@@ -12,7 +12,8 @@ The leader runs:
 | Scheduler | `SchedulerInterval` (5 s) | Makes due `scheduled` and `retryable` jobs `available`, and wakes their queues |
 | Rescuer | 30 s | Jobs `running` with no sign of life (start or heartbeat) for `RescueStuckJobsAfter` (1 h) and, unless they heartbeated, past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
 | Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them), except members of a batch that still exists |
-| Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
+| Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h, unless the queue's rate limiter is still ahead |
+| Rate limit cleaner | 30 s | Deletes per-key [rate limiter](rate-limiting.md) rows a minute after they've caught up |
 | Batch finisher | 1 s | Enqueues the callbacks of batches whose jobs have all finished, and marks them finished, in one statement ([batches](batches.md)) |
 | Batch cleaner | 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callbacks have finished |
 | Periodic enqueuer | on schedule, re-reading every `SchedulerInterval` | Enqueues due periodic jobs from `{prefix}periodic_job` ([periodic jobs](scheduled-and-periodic-jobs.md#periodic)) |
