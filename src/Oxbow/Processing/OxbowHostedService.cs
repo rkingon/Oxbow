@@ -34,6 +34,7 @@ internal sealed class OxbowHostedService(
     private Task _notifierLoop = Task.CompletedTask;
     private Task _completerLoop = Task.CompletedTask;
     private Completer? _completer;
+    private Maintenance? _maintenance;
     private DiscardHooks? _discardHooks;
 
     internal Elector? Elector { get; private set; }
@@ -60,6 +61,7 @@ internal sealed class OxbowHostedService(
 
         Elector = new Elector(runtime, _logger);
         var maintenance = new Maintenance(runtime, workers, client, scopes, retryPolicy, timeProvider, TriggerFetch, _discardHooks, _logger);
+        _maintenance = maintenance;
 
         if (!options.PollOnly)
         {
@@ -218,6 +220,12 @@ internal sealed class OxbowHostedService(
     private void OnControlNotification(string payload)
     {
         var control = JsonSerializer.Deserialize(payload, OxbowJsonContext.Default.ControlPayload);
+        if (control?.Action == ControlPayload.PeriodicJobChanged)
+        {
+            _maintenance?.WakePeriodic();
+            return;
+        }
+
         if (control?.Queue is not { } queue)
         {
             return;

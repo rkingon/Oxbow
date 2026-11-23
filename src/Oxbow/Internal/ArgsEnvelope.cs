@@ -24,32 +24,42 @@ internal static class ArgsEnvelope
     /// The plaintext args. Recognized by shape rather than by the kind's current settings, so turning encryption on or
     /// off for a kind leaves its existing jobs workable.
     /// </summary>
-    public static JsonElement Open(JobRow row, IJobArgsProtector? protector)
+    public static JsonElement Open(JobRow row, IJobArgsProtector? protector) =>
+        Open(row.Kind, row.Args, protector, $"job {row.Id}");
+
+    public static bool IsSealed(JsonElement args) =>
+        args.ValueKind == JsonValueKind.String && args.GetString()!.StartsWith(Marker, StringComparison.Ordinal);
+
+    public static bool IsSealed(string encodedArgs) => encodedArgs.StartsWith("\"" + Marker, StringComparison.Ordinal);
+
+    // subject names what the args belong to, for errors.
+    public static JsonElement Open(string kind, JsonElement args, IJobArgsProtector? protector, string subject)
     {
-        if (row.Args.ValueKind != JsonValueKind.String || row.Args.GetString() is not { } stored || !stored.StartsWith(Marker, StringComparison.Ordinal))
+        if (!IsSealed(args))
         {
-            return row.Args;
+            return args;
         }
 
+        var stored = args.GetString()!;
         if (!stored.StartsWith(Prefix, StringComparison.Ordinal))
         {
-            throw new JobArgsDecryptionException($"Args of job {row.Id} use an unknown encryption format; a newer Oxbow wrote them.");
+            throw new JobArgsDecryptionException($"Args of {subject} use an unknown encryption format; a newer Oxbow wrote them.");
         }
 
         if (protector is null)
         {
             throw new JobArgsDecryptionException(
-                $"Args of job {row.Id} are encrypted, but no IJobArgsProtector is registered. Call AddArgsEncryption().");
+                $"Args of {subject} are encrypted, but no IJobArgsProtector is registered. Call AddArgsEncryption().");
         }
 
         string plaintext;
         try
         {
-            plaintext = protector.Unprotect(row.Kind, stored[Prefix.Length..]);
+            plaintext = protector.Unprotect(kind, stored[Prefix.Length..]);
         }
         catch (Exception ex)
         {
-            throw new JobArgsDecryptionException($"Args of job {row.Id} can't be decrypted: {ex.Message}", ex);
+            throw new JobArgsDecryptionException($"Args of {subject} can't be decrypted: {ex.Message}", ex);
         }
 
         using var document = JsonDocument.Parse(plaintext);

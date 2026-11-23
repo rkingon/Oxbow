@@ -103,7 +103,7 @@ public sealed class OxbowOptions
     /// <param name="schedule">When it runs.</param>
     /// <param name="createArgs">Creates the args for each run.</param>
     /// <param name="options">Insert options for each run.</param>
-    /// <param name="runOnStart">Also enqueue it when the leader starts the periodic enqueuer.</param>
+    /// <param name="runOnStart">Enqueue the first run at once, rather than at the schedule's first occurrence.</param>
     /// <returns>These options.</returns>
     public OxbowOptions AddPeriodicJob(
         PeriodicSchedule schedule,
@@ -112,6 +112,24 @@ public sealed class OxbowOptions
         bool runOnStart = false)
     {
         PeriodicJobs.Add(new PeriodicJob(schedule, createArgs, options, runOnStart));
+        return this;
+    }
+
+    /// <summary>Registers a periodic job whose run times are persisted under <paramref name="name"/>.</summary>
+    /// <param name="name">A stable name, unique among periodic jobs. Keeps the job's history across schedule changes.</param>
+    /// <param name="schedule">When it runs.</param>
+    /// <param name="createArgs">Creates the args for each run.</param>
+    /// <param name="options">Insert options for each run.</param>
+    /// <param name="runOnStart">Enqueue the first run at once, rather than at the schedule's first occurrence.</param>
+    /// <returns>These options.</returns>
+    public OxbowOptions AddPeriodicJob(
+        string name,
+        PeriodicSchedule schedule,
+        Func<IJobArgs> createArgs,
+        InsertOptions? options = null,
+        bool runOnStart = false)
+    {
+        PeriodicJobs.Add(new PeriodicJob(schedule, createArgs, options, runOnStart) { Name = name });
         return this;
     }
 }

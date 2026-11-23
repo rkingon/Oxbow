@@ -56,6 +56,21 @@ public sealed class UnknownJobKindException : Exception
     public string Kind { get; }
 }
 
+/// <summary>A periodic job with the name already exists, created at runtime or registered in code.</summary>
+public sealed class PeriodicJobExistsException : Exception
+{
+    /// <summary>Creates the exception for <paramref name="name"/>.</summary>
+    /// <param name="name">The periodic job's name.</param>
+    public PeriodicJobExistsException(string name)
+        : base($"A periodic job named '{name}' already exists. Replace it with UpsertPeriodicJobAsync, or choose another name.")
+    {
+        Name = name;
+    }
+
+    /// <summary>The periodic job's name.</summary>
+    public string Name { get; }
+}
+
 /// <summary>
 /// A job's args are encrypted and can't be decrypted: no <see cref="IJobArgsProtector"/> is registered, the key is
 /// gone or revoked, or the payload was tampered with. Worked like args that fail to deserialize: retried, then discarded.

@@ -33,8 +33,17 @@ All notable changes to this project are documented here. The format follows
   `Oxbow.Testing`.
 - Discard handlers: `AddDiscardHandler<T>()` registers an `IJobDiscardHandler`, called best-effort after a job is
   discarded or cancelled by its worker, a cancel request, the rescuer or the scheduler's unique-key check.
+- Durable periodic jobs. Run times of every periodic job are persisted in `{prefix}periodic_job` (schema version 2), so
+  a leader failover or restart neither skips nor repeats a run, and missed runs catch up once. Periodic jobs can be
+  stored and managed at runtime: `IOxbowClient.CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`,
+  `PausePeriodicJobAsync`, `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and
+  `ListPeriodicJobsAsync` (paged).
+  `AddPeriodicJob(name, …)` names a code-registered job; unnamed ones get a name derived from kind and schedule.
 
 ### Changed
+
+- `runOnStart` on periodic jobs enqueues the first run only, when the job has no persisted state yet. It no longer runs
+  on every start or change of leader. Periodic runs carry `oxbow:periodic_job` in their metadata.
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and
   grant `GetGrants(role, version: 2)` before deploying. The previous release keeps working against version 2.

@@ -55,6 +55,18 @@ internal static partial class Log
     [LoggerMessage(40, LogLevel.Error, "Finishing batch {BatchId} failed; retrying on the next pass.")]
     public static partial void BatchFinishFailed(ILogger logger, Exception exception, long batchId);
 
+    [LoggerMessage(50, LogLevel.Error, "Enqueuing a run of periodic job '{Name}' failed; the run is skipped.")]
+    public static partial void PeriodicRunFailed(ILogger logger, Exception exception, string name);
+
+    [LoggerMessage(51, LogLevel.Error, "Periodic job '{Name}' has a schedule this node can't read; it won't run until it's replaced.")]
+    public static partial void PeriodicScheduleInvalid(ILogger logger, Exception exception, string name);
+
+    [LoggerMessage(52, LogLevel.Error, "Periodic job '{Name}' is registered in code, but a periodic job created at runtime has that name; it won't run until one is renamed.")]
+    public static partial void PeriodicNameConflict(ILogger logger, string name);
+
+    [LoggerMessage(53, LogLevel.Error, "A periodic job registered without a name couldn't be named: its args failed to be created or its derived name '{Name}' is invalid. Give it a name.")]
+    public static partial void PeriodicUnnamed(ILogger logger, Exception? exception, string? name);
+
     // 70–79: job output and discard handlers.
     [LoggerMessage(70, LogLevel.Error, "Discard handler {Handler} failed for job {JobId}.")]
     public static partial void DiscardHandlerFailed(ILogger logger, Exception exception, string handler, long jobId);

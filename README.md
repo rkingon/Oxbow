@@ -11,7 +11,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Job output stored with the completion; discard handlers for jobs that are discarded or cancelled
 - Cancel a queued job, or signal a running one on any node through its `CancellationToken`
 - Unique jobs enforced by a unique index: by args, period, queue and state
-- Scheduled and periodic (interval or cron) jobs
+- Scheduled and periodic (interval or cron) jobs, with run times persisted across failovers and schedules editable at runtime
 - Batches: insert a group of jobs atomically, with callback jobs when it completes or succeeds
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
@@ -144,8 +144,10 @@ builder.Services.AddOxbow(o =>
 });
 ```
 
-Only the elected leader enqueues them. Pair them with `UniqueOptions.ByPeriod` if a leader failover must never
-produce a duplicate run.
+Only the elected leader enqueues them. Run times are persisted, so a failover neither skips nor repeats a run. Name a job
+(`o.AddPeriodicJob("nightly-report", …)`) to keep its history when its schedule changes. Periodic jobs can also be
+stored and managed at runtime with `CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`, `PausePeriodicJobAsync`, `ResumePeriodicJobAsync` and
+`DeletePeriodicJobAsync`. See [periodic jobs](docs/scheduled-and-periodic-jobs.md#periodic).
 
 ## Least privilege
 
@@ -158,6 +160,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_job, public.oxbow_queue, pu
 GRANT SELECT ON public.oxbow_migration TO app_role;
 GRANT USAGE ON SEQUENCE public.oxbow_job_id_seq TO app_role;
 GRANT EXECUTE ON FUNCTION public.oxbow_job_state_in_bitmask(bit(8), public.oxbow_job_state) TO app_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_periodic_job TO app_role;
 ```
 
 The test suite runs everything as such a role, next to a table with forced row-level security. Oxbow never calls

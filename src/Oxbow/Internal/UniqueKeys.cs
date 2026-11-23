@@ -63,7 +63,7 @@ internal static class UniqueKeys
         UniqueOptions options,
         string kind,
         string encodedArgs,
-        JsonTypeInfo argsTypeInfo,
+        JsonTypeInfo? argsTypeInfo,
         string queue,
         DateTimeOffset scheduledAt,
         IJobArgsProtector? keyedHash = null)
@@ -96,7 +96,7 @@ internal static class UniqueKeys
         return keyedHash is null ? SHA256.HashData(bytes) : keyedHash.HashUniqueKey(bytes);
     }
 
-    private static string UniqueArgs(string encodedArgs, JsonTypeInfo typeInfo)
+    private static string UniqueArgs(string encodedArgs, JsonTypeInfo? typeInfo)
     {
         using var document = JsonDocument.Parse(encodedArgs);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -107,7 +107,7 @@ internal static class UniqueKeys
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
-            if (!HasUniqueProperties(typeInfo, 0))
+            if (typeInfo is null || !HasUniqueProperties(typeInfo, 0))
             {
                 WriteSorted(writer, document.RootElement.EnumerateObject()
                     .DistinctBy(p => p.Name, StringComparer.Ordinal)

@@ -61,9 +61,13 @@ and out of the messages of exceptions your workers throw: the message is recorde
 | Worker (`Job<TArgs>.Args`), work middleware (`JobContext.Args`) | Plaintext args object |
 | `Job<TArgs>.Row.Args`, `JobContext.Job.Args` | The envelope |
 | `GetAsync`, `ListAsync`, `CancelAsync`, … (`JobRow.Args`) | The envelope |
+| Stored periodic jobs (`PeriodicJobRow.Args`) | The envelope |
 
 Args are encrypted after the unique key is computed, on every insert path: `InsertAsync`, `InsertManyAsync`,
-`InsertManyFastAsync` and the periodic enqueuer. To read a stored job's args, decrypt them with the protector:
+`InsertManyFastAsync` and the periodic enqueuer. A stored periodic job keeps its args encrypted whenever its runs would
+be: `CreatePeriodicJobAsync` and `UpsertPeriodicJobAsync` seal them, and the leader decrypts them for each run and
+encrypts the run's args again. Creating one from a kind and JSON on a node without the kind's worker can't see
+`[EncryptArgs]`, so the args are stored in plaintext unless `EncryptAllArgs` is set there. To read a stored job's args, decrypt them with the protector:
 
 ```csharp
 var protector = services.GetRequiredService<IJobArgsProtector>();

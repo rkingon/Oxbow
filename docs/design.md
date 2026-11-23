@@ -120,6 +120,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}job, {s}.{p}queue, {s}.{p}leader 
 GRANT SELECT ON {s}.{p}migration TO {role};
 GRANT USAGE ON SEQUENCE {s}.{p}job_id_seq TO {role};
 GRANT EXECUTE ON FUNCTION {s}.{p}job_state_in_bitmask(bit(8), {s}.{p}job_state) TO {role};
+GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}periodic_job TO {role};
 ```
 
 LISTEN/NOTIFY needs no grant. The runtime never runs DDL, never creates temp tables, never calls `SET` (or
@@ -315,16 +316,21 @@ which wakes the followers at once.
 | Queue cleaner | every 1 h | Deletes `{p}queue` rows not updated for 24 h. |
 | Batch finisher | every 1 s | For each unfinished batch with no live member, one statement locks the batch row (`FOR UPDATE SKIP LOCKED`, rechecking `finalized_at IS NULL`), counts members, inserts the prepared callbacks and freezes the counts. See [batches](batches.md). |
 | Batch cleaner | every 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callback jobs are finalized or gone. |
-| Periodic enqueuer | timer | See below. |
+| Periodic enqueuer | due time, at most `SchedulerInterval` | See below. |
 | Queue depth | every 10 s | `count(*)` by queue and state, published as an observable gauge. |
 
 Maintenance runs as the runtime role, so River's reindexer is left out (`REINDEX` needs ownership).
 
-**Periodic jobs.** These are registered in options: `PeriodicSchedule.Every(TimeSpan)` or `PeriodicSchedule.Cron(expr,
-TimeZoneInfo?)` (Cronos), a constructor returning `IJobArgs` plus optional `InsertOptions`, and `runOnStart`. Only the
-leader enqueues them. The next-run times live in memory and are recomputed when a node gains leadership, so a failover can
-skip or repeat a run. As River's docs advise, pair periodic jobs with `Unique.ByPeriod` when repeats matter. Run-on-start
-jobs are enqueued when the enqueuer starts, which on a failover means the new leader enqueues them too.
+**Periodic jobs.** These are registered in options or stored in `{p}periodic_job` through the client. The schedule is
+`PeriodicSchedule.Every(TimeSpan)` or `PeriodicSchedule.Cron(expr, TimeZoneInfo?)` (Cronos). Every periodic job has a
+row keyed by name, and the row holds its `next_run_at` and `last_run_at`. A row created at runtime also holds its kind,
+args, options and schedule. For a job registered in code, the leader syncs the row's schedule from its registration. The
+enqueuer asks the database what's due (`next_run_at <= now()`, not paused). For each due run, one transaction advances
+`next_run_at` with `UPDATE … WHERE next_run_at = @read AND updated_at = @read` and inserts the job through the normal
+pipeline. If the guard misses, the transaction rolls back and nothing is inserted, so a failover can neither skip nor
+repeat a run. The enqueuer then sleeps until the next `next_run_at`, for at most `SchedulerInterval`. A NOTIFY on the
+control channel, sent after every runtime change, wakes it sooner. After downtime it makes one catch-up run per job.
+Run-on-start applies only to a job's first run. See [periodic jobs](scheduled-and-periodic-jobs.md#periodic).
 
 ## Inserting
 

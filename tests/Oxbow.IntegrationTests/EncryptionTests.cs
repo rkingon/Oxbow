@@ -71,6 +71,33 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
     }
 
     [Fact]
+    public async Task Stored_periodic_jobs_keep_encrypted_args_encrypted_at_rest()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix);
+
+        var typed = await app.Client.CreatePeriodicJobAsync("typed", PeriodicSchedule.Every(TimeSpan.FromSeconds(1)), new SecretArgs("typed@example.com"));
+        await app.Client.CreatePeriodicJobAsync(
+            "untyped", PeriodicSchedule.Every(TimeSpan.FromSeconds(1)), "secret", JsonDocument.Parse("""{"email":"untyped@example.com"}""").RootElement);
+        await app.Client.CreatePeriodicJobAsync("plain", PeriodicSchedule.Every(TimeSpan.FromHours(1)), new RecordArgs("plain@example.com"));
+
+        Assert.StartsWith("oxbow:enc:v1:", typed.Args!.Value.GetString(), StringComparison.Ordinal);
+        Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM public.{prefix}periodic_job WHERE kind = 'secret' AND (args::text LIKE '%example.com%' OR args #>> '{{}}' NOT LIKE 'oxbow:enc:v1:%')"));
+        Assert.Equal(1L, await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM public.{prefix}periodic_job WHERE name = 'plain' AND args = '{{\"value\": \"plain@example.com\"}}'"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        while (!(app.Recorder.Events.Contains("typed@example.com") && app.Recorder.Events.Contains("untyped@example.com")))
+        {
+            await Task.Delay(50, cts.Token);
+        }
+
+        Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM public.{prefix}job WHERE kind = 'secret' AND args::text LIKE '%example.com%'"));
+    }
+
+    [Fact]
     public async Task A_node_that_predates_encryption_fails_to_deserialize_instead_of_running_with_defaults()
     {
         var prefix = await database.CreateSchemaAsync();

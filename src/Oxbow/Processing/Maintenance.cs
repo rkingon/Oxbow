@@ -23,6 +23,10 @@ internal sealed class Maintenance(
     private static readonly TimeSpan QueueCleanerInterval = TimeSpan.FromHours(1);
     private static readonly TimeSpan QueueRetention = TimeSpan.FromHours(24);
     private static readonly TimeSpan DepthInterval = TimeSpan.FromSeconds(10);
+    private readonly PeriodicEnqueuer _periodic = new(runtime, client, timeProvider, logger);
+
+    /// <summary>Periodic jobs changed; while leading, re-read them now.</summary>
+    public void WakePeriodic() => _periodic.Wake();
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -36,7 +40,7 @@ internal sealed class Maintenance(
                 EveryAsync("batch-finisher", runtime.Options.BatchFinisherInterval, FinishBatchesAsync, cancellationToken, runImmediately: true),
                 EveryAsync("batch-cleaner", runtime.Options.CleanerInterval, CleanBatchesAsync, cancellationToken),
                 EveryAsync("queue-depth", DepthInterval, MeasureDepthAsync, cancellationToken, runImmediately: true),
-                new PeriodicEnqueuer(runtime, client, timeProvider, logger).RunAsync(cancellationToken)).ConfigureAwait(false);
+                _periodic.RunAsync(cancellationToken)).ConfigureAwait(false);
         }
         finally
         {
@@ -424,80 +428,6 @@ internal sealed class Maintenance(
             {
                 Log.MaintenanceFailed(logger, ex, name);
             }
-        }
-    }
-}
-
-/// <summary>Enqueues periodic jobs on their schedules. Next-run times live in memory and restart with each leader.</summary>
-internal sealed class PeriodicEnqueuer(OxbowRuntime runtime, OxbowClient client, TimeProvider timeProvider, ILogger logger)
-{
-    public async Task RunAsync(CancellationToken cancellationToken)
-    {
-        var jobs = runtime.Options.PeriodicJobs;
-        if (jobs.Count == 0)
-        {
-            return;
-        }
-
-        var now = timeProvider.GetUtcNow();
-        var next = jobs.Select(j => j.Schedule.GetNextOccurrence(now)).ToArray();
-        await EnqueueAsync(jobs.Where(j => j.RunOnStart), cancellationToken).ConfigureAwait(false);
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var soonest = next.Where(n => n is not null).DefaultIfEmpty(null).Min();
-            if (soonest is null)
-            {
-                return;
-            }
-
-            var delay = soonest.Value - timeProvider.GetUtcNow();
-            if (delay > TimeSpan.Zero)
-            {
-                try
-                {
-                    await Task.Delay(delay, timeProvider, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-            }
-
-            now = timeProvider.GetUtcNow();
-            var due = new List<PeriodicJob>();
-            for (var i = 0; i < jobs.Count; i++)
-            {
-                if (next[i] is { } at && at <= now)
-                {
-                    due.Add(jobs[i]);
-                    var following = jobs[i].Schedule.GetNextOccurrence(at);
-                    next[i] = following is { } f && f <= now ? jobs[i].Schedule.GetNextOccurrence(now) : following;
-                }
-            }
-
-            await EnqueueAsync(due, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private async Task EnqueueAsync(IEnumerable<PeriodicJob> jobs, CancellationToken cancellationToken)
-    {
-        var items = new List<InsertManyItem>();
-        try
-        {
-            foreach (var job in jobs)
-            {
-                items.Add(new InsertManyItem(job.CreateArgs(), job.Options));
-            }
-
-            if (items.Count > 0)
-            {
-                await client.InsertUncheckedAsync(items, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            Log.PeriodicFailed(logger, ex);
         }
     }
 }

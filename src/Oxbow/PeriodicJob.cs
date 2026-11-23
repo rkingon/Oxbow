@@ -1,3 +1,4 @@
+using System.Globalization;
 using Cronos;
 
 namespace Oxbow;
@@ -6,12 +7,19 @@ namespace Oxbow;
 /// <param name="Schedule">When it runs.</param>
 /// <param name="CreateArgs">Creates the args for each run.</param>
 /// <param name="Options">Insert options for each run.</param>
-/// <param name="RunOnStart">Also enqueue it when the leader starts the periodic enqueuer.</param>
+/// <param name="RunOnStart">Enqueue the first run at once, rather than at the schedule's first occurrence.</param>
 public sealed record PeriodicJob(
     PeriodicSchedule Schedule,
     Func<IJobArgs> CreateArgs,
     InsertOptions? Options = null,
-    bool RunOnStart = false);
+    bool RunOnStart = false)
+{
+    /// <summary>
+    /// The name its run times are persisted under. Default: the kind and the schedule, so changing the schedule starts
+    /// a fresh history.
+    /// </summary>
+    public string? Name { get; init; }
+}
 
 /// <summary>When a periodic job runs.</summary>
 public abstract class PeriodicSchedule
@@ -19,6 +27,12 @@ public abstract class PeriodicSchedule
     private protected PeriodicSchedule()
     {
     }
+
+    internal virtual string? Expression => null;
+
+    internal virtual TimeZoneInfo? TimeZone => null;
+
+    internal virtual TimeSpan? Interval => null;
 
     /// <summary>Runs every <paramref name="interval"/>.</summary>
     /// <param name="interval">The interval, at least one second.</param>
@@ -39,7 +53,7 @@ public abstract class PeriodicSchedule
         var format = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length == 6
             ? CronFormat.IncludeSeconds
             : CronFormat.Standard;
-        return new CronSchedule(CronExpression.Parse(expression, format), timeZone ?? TimeZoneInfo.Utc);
+        return new CronSchedule(expression, CronExpression.Parse(expression, format), timeZone ?? TimeZoneInfo.Utc);
     }
 
     /// <summary>The next run strictly after <paramref name="from"/>.</summary>
@@ -47,13 +61,33 @@ public abstract class PeriodicSchedule
     /// <returns>The next run time, or <see langword="null"/> if there is none.</returns>
     public abstract DateTimeOffset? GetNextOccurrence(DateTimeOffset from);
 
+    internal static PeriodicSchedule FromStored(string? cron, string? timeZoneId, double? everySeconds) =>
+        cron is not null
+            ? Cron(cron, TimeZoneInfo.FindSystemTimeZoneById(timeZoneId ?? "UTC"))
+            : Every(TimeSpan.FromSeconds(everySeconds ?? throw new InvalidOperationException("A stored schedule has neither a cron expression nor an interval.")));
+
+    /// <summary>Whether <see cref="FromStored"/> failed because the stored schedule can't be read on this node.</summary>
+    internal static bool IsUnreadable(Exception exception) =>
+        exception is CronFormatException or TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException or InvalidOperationException;
+
     private sealed class IntervalSchedule(TimeSpan interval) : PeriodicSchedule
     {
+        internal override TimeSpan? Interval => interval;
+
         public override DateTimeOffset? GetNextOccurrence(DateTimeOffset from) => from + interval;
+
+        public override string ToString() => $"every {interval.ToString("c", CultureInfo.InvariantCulture)}";
     }
 
-    private sealed class CronSchedule(CronExpression expression, TimeZoneInfo timeZone) : PeriodicSchedule
+    private sealed class CronSchedule(string text, CronExpression expression, TimeZoneInfo timeZone) : PeriodicSchedule
     {
+        internal override string Expression => text;
+
+        internal override TimeZoneInfo TimeZone => timeZone;
+
         public override DateTimeOffset? GetNextOccurrence(DateTimeOffset from) => expression.GetNextOccurrence(from, timeZone);
+
+        public override string ToString() =>
+            timeZone.Id == TimeZoneInfo.Utc.Id ? $"cron {text}" : $"cron {text} {timeZone.Id}";
     }
 }
