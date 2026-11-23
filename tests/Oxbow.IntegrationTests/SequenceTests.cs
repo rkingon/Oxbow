@@ -390,6 +390,67 @@ public sealed class SequenceTests(PostgresFixture database)
     }
 
     [Fact]
+    public async Task Rows_carry_their_sequence_key_and_list_filters_by_it()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var key = NewKey();
+
+        var inserted = await app.Client.InsertAsync(new RecordArgs("a"), new InsertOptions { SequenceKey = key });
+        await app.Client.InsertAsync(new RecordArgs("b"));
+
+        Assert.Equal(key, inserted.Job.SequenceKey);
+        var page = await app.Client.ListAsync(new JobListQuery { SequenceKey = key });
+        Assert.Equal([inserted.Job.Id], page.Jobs.Select(j => j.Id));
+        Assert.Equal("seq:{\"key\":\"k\"}", (await app.Client.InsertAsync(new SeqArgs("k", 0))).Job.SequenceKey);
+    }
+
+    [Fact]
+    public async Task Bulk_retry_returns_a_halted_sequence_to_the_line_and_resumes_it()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var log = new SequenceLog();
+        await using var app = await StartWorkerAsync(prefix, log);
+        var key = NewKey();
+
+        var head = await app.Client.InsertAsync(new SeqArgs(key, 0, FailTimes: 1), new InsertOptions { MaxAttempts = 1 });
+        var next = await app.Client.InsertAsync(new SeqArgs(key, 1));
+        await app.WaitForStateAsync(head.Job.Id, JobState.Discarded);
+
+        // Both match: the halted head goes back to pending and runs first, the pending one is left in line.
+        var sequenceKey = head.Job.SequenceKey!;
+        var result = await app.Client.RetryManyAsync(new JobFilter { SequenceKey = sequenceKey });
+        Assert.Equal(2, result.Retried);
+
+        await WaitAllAsync(app, [head.Job.Id, next.Job.Id]);
+        Assert.Equal([0, 0, 1], log.Order(key));
+        Assert.Equal(0, log.Overlaps);
+    }
+
+    [Fact]
+    public async Task Bulk_delete_of_a_halting_job_and_bulk_cancel_of_a_head_promote_the_next_job()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var log = new SequenceLog();
+        await using var app = await StartWorkerAsync(prefix, log, o => o.SchedulerInterval = TimeSpan.FromMinutes(1));
+        var (halted, waiting) = (NewKey(), NewKey());
+
+        var head = await app.Client.InsertAsync(new SeqArgs(halted, 0, FailTimes: 1), new InsertOptions { MaxAttempts = 1 });
+        var afterHalt = await app.Client.InsertAsync(new SeqArgs(halted, 1));
+        await app.WaitForStateAsync(head.Job.Id, JobState.Discarded);
+        Assert.Equal(1, await app.Client.DeleteManyAsync(new JobFilter { SequenceKey = head.Job.SequenceKey, States = [JobState.Discarded] }));
+        await app.WaitForStateAsync(afterHalt.Job.Id, JobState.Completed, TimeSpan.FromSeconds(5));
+
+        // A head scheduled far ahead holds its sequence; cancelling it in bulk (it never ran) frees the next job.
+        var later = await app.Client.InsertAsync(new SeqArgs(waiting, 0), new InsertOptions { ScheduledAt = DateTimeOffset.UtcNow.AddHours(1) });
+        var behind = await app.Client.InsertAsync(new SeqArgs(waiting, 1));
+        await app.WaitForStateAsync(later.Job.Id, JobState.Scheduled, TimeSpan.FromSeconds(5));
+        var cancelled = await app.Client.CancelManyAsync(new JobFilter { SequenceKey = later.Job.SequenceKey, States = [JobState.Scheduled] });
+        Assert.Equal(1, cancelled.Cancelled);
+        await app.WaitForStateAsync(behind.Job.Id, JobState.Completed, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task A_unique_duplicate_of_a_pending_job_is_skipped()
     {
         var prefix = await database.CreateSchemaAsync();

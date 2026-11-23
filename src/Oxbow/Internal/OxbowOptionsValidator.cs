@@ -29,6 +29,24 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
             }
         }
 
+        var periodicNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var job in options.PeriodicJobs)
+        {
+            if (job.Name is not { } periodicName)
+            {
+                continue;
+            }
+
+            if (!PeriodicJobNames.IsValid(periodicName))
+            {
+                failures.Add($"Periodic job name '{periodicName}' must be 1 to 255 characters and not blank.");
+            }
+            else if (!periodicNames.Add(periodicName))
+            {
+                failures.Add($"Periodic job name '{periodicName}' is registered twice.");
+            }
+        }
+
         if (options.MaxAttempts is < 1 or > short.MaxValue)
         {
             failures.Add($"MaxAttempts must be between 1 and {short.MaxValue}.");
@@ -42,6 +60,7 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
         RequirePositiveOrInfinite(failures, nameof(options.CompletedJobRetention), options.CompletedJobRetention);
         RequirePositiveOrInfinite(failures, nameof(options.CancelledJobRetention), options.CancelledJobRetention);
         RequirePositiveOrInfinite(failures, nameof(options.DiscardedJobRetention), options.DiscardedJobRetention);
+        RequirePositiveOrInfinite(failures, nameof(options.BatchRetention), options.BatchRetention);
 
         if (options.JsonSerializerOptions is null)
         {

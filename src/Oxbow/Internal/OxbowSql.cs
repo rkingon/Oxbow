@@ -14,6 +14,8 @@ internal sealed class OxbowSql
         var bitmask = $"{schema}.{prefix}job_state_in_bitmask";
         var leader = $"{schema}.{prefix}leader";
         var queue = $"{schema}.{prefix}queue";
+        var periodic = $"{schema}.{prefix}periodic_job";
+        var batch = $"{schema}.{prefix}batch";
 
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
@@ -23,7 +25,7 @@ internal sealed class OxbowSql
         SchemaVersion = $"SELECT coalesce(max(version), 0) FROM {schema}.{prefix}migration";
 
         InsertMany = $"""
-            INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
+            INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states, batch_id,
                 sequence_key, sequence_continue_on)
             SELECT
                 i.args::jsonb,
@@ -37,6 +39,7 @@ internal sealed class OxbowSql
                 coalesce(string_to_array(nullif(i.tags, ''), ','), '{"{}"}')::varchar(255)[],
                 i.unique_key,
                 nullif(i.unique_states, 0)::bit(8),
+                @batch_id::bigint,
                 i.sequence_key,
                 i.sequence_continue_on
             FROM unnest(
@@ -223,16 +226,153 @@ internal sealed class OxbowSql
 
         Get = $"SELECT {Columns(prefix + "job")} FROM {job} WHERE id = @id";
 
+        GetMany = $"SELECT {Columns(prefix + "job")} FROM {job} WHERE id = ANY(@ids::bigint[])";
+
         ListTemplate = $"""
             SELECT {Columns(prefix + "job")}
             FROM {job}
-            WHERE (@states::text[] IS NULL OR state::text = ANY(@states))
-              AND (@queues::text[] IS NULL OR queue = ANY(@queues))
-              AND (@kinds::text[] IS NULL OR kind = ANY(@kinds))
-              AND (@after::bigint IS NULL OR id {"{0}"} @after)
-            ORDER BY id {"{1}"}
+            WHERE {"{0}"}
+              AND (@after::bigint IS NULL OR id {"{1}"} @after)
+            ORDER BY id {"{2}"}
             LIMIT @limit
             """;
+
+        // The bulk operations run one batch per statement, walking IDs upward from @after to @until, the highest ID when
+        // the operation started, so a stream of matching inserts can't keep it going. Each returns scanned, last_id,
+        // affected, then cancel requests or skipped unique conflicts, then the sequences it may have freed. Rows are locked in ID order and waited for rather
+        // than skipped, so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
+        CancelManyTemplate = $"""
+            WITH locked AS (
+                SELECT id
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state NOT IN ('cancelled', 'completed', 'discarded')
+                  AND finalized_at IS NULL
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            updated AS (
+                UPDATE {job} AS j
+                SET
+                    state = CASE WHEN j.state = 'running' THEN j.state ELSE 'cancelled' END,
+                    finalized_at = CASE WHEN j.state = 'running' THEN j.finalized_at ELSE now() END,
+                    metadata = jsonb_set(j.metadata, ARRAY['cancel_attempted_at'], to_jsonb(now()), true)
+                FROM locked
+                WHERE j.id = locked.id
+                RETURNING j.id, j.queue, j.state = 'running' AS running, j.sequence_key
+            ),
+            -- One NOTIFY per queue per 300 running jobs: 300 IDs plus the longest queue name stay under the 8000-byte
+            -- payload limit.
+            notified AS (
+                SELECT pg_notify(@channel, json_build_object('action', 'cancel', 'queue', queue, 'job_ids', json_agg(id ORDER BY id))::text)
+                FROM (
+                    SELECT id, queue, (row_number() OVER (PARTITION BY queue ORDER BY id) - 1) / 300 AS chunk
+                    FROM updated
+                    WHERE running
+                ) AS r
+                GROUP BY queue, chunk
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM updated WHERE NOT running),
+                (SELECT count(*) FROM updated WHERE running),
+                (SELECT array_agg(DISTINCT sequence_key) FROM updated WHERE NOT running AND sequence_key IS NOT NULL),
+                -- Referenced so the NOTIFYs run; an unreferenced CTE is never evaluated.
+                (SELECT count(*) FROM notified)
+            """;
+
+        // A job that would take a unique key another live job holds is skipped (RetryAsync would throw instead), as are
+        // all but the lowest ID of batch rows that would take the same key. A holder committed after the statement's
+        // snapshot still raises a unique violation; the client reruns the batch, whose new snapshot sees it.
+        RetryManyTemplate = $"""
+            WITH locked AS (
+                SELECT id, state, unique_key, unique_states
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state <> 'running'
+                  AND NOT (state = 'available' AND scheduled_at < now())
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            claiming AS (
+                SELECT id, unique_key, row_number() OVER (PARTITION BY unique_key ORDER BY id) AS row_num
+                FROM locked
+                WHERE unique_key IS NOT NULL
+                  AND unique_states IS NOT NULL
+                  AND {bitmask}(unique_states, 'available')
+                  AND NOT {bitmask}(unique_states, state)
+            ),
+            conflicts AS (
+                SELECT c.id
+                FROM claiming AS c
+                WHERE c.row_num > 1
+                   OR EXISTS (
+                       SELECT 1 FROM {job} AS o
+                       WHERE o.unique_key = c.unique_key
+                         AND o.id <> c.id
+                         AND o.unique_states IS NOT NULL
+                         AND {bitmask}(o.unique_states, o.state))
+            ),
+            updated AS (
+                UPDATE {job} AS j
+                SET
+                    -- As in Retry: a sequence job rejoins the line.
+                    state = CASE
+                        WHEN j.sequence_key IS NOT NULL AND j.state IN ('cancelled', 'completed', 'discarded', 'pending')
+                        THEN 'pending'::{state}
+                        ELSE 'available'::{state}
+                    END,
+                    max_attempts = CASE WHEN j.attempt = j.max_attempts THEN j.max_attempts + 1 ELSE j.max_attempts END,
+                    finalized_at = NULL,
+                    metadata = j.metadata - 'cancel_attempted_at',
+                    scheduled_at = now()
+                FROM locked
+                WHERE j.id = locked.id
+                  AND locked.id NOT IN (SELECT id FROM conflicts)
+                RETURNING j.id, j.sequence_key
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM updated),
+                (SELECT count(*) FROM conflicts),
+                (SELECT array_agg(DISTINCT sequence_key) FROM updated WHERE sequence_key IS NOT NULL)
+            """;
+
+        DeleteManyTemplate = $"""
+            WITH locked AS (
+                SELECT id
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state <> 'running'
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            deleted AS (
+                DELETE FROM {job} AS j
+                USING locked
+                WHERE j.id = locked.id
+                RETURNING j.id, j.sequence_key
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM deleted),
+                0::bigint,
+                (SELECT array_agg(DISTINCT sequence_key) FROM deleted WHERE sequence_key IS NOT NULL)
+            """;
+
+        MaxJobId = $"SELECT coalesce(max(id), 0) FROM {job}";
 
         GetCancelRequested = $"""
             SELECT id FROM {job}
@@ -290,7 +430,7 @@ internal sealed class OxbowSql
                 END
             FROM job_updates AS u
             WHERE j.id = u.id
-            RETURNING j.queue, u.new_state::text
+            RETURNING j.queue, u.new_state::text, j.id
             """;
 
         GetStuck = $"""
@@ -298,6 +438,7 @@ internal sealed class OxbowSql
             FROM {job}
             WHERE state = 'running'
               AND attempted_at < @stuck_horizon
+              AND {LastSeen(prefix + "job")} < @stuck_horizon
               AND id > @after_id
             ORDER BY id
             LIMIT @max
@@ -318,18 +459,41 @@ internal sealed class OxbowSql
                 AS r(id, error, finalized_at, scheduled_at, state)
             WHERE j.id = r.id
               AND j.state = 'running'
-              AND j.attempted_at < @stuck_horizon
+              AND {LastSeen("j")} < @stuck_horizon
+            RETURNING {Columns("j")}
+            """;
+
+        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing.
+        Heartbeat = $"""
+            UPDATE {job}
+            SET metadata = metadata || jsonb_build_object('oxbow:heartbeat_at', now())
+            WHERE id = @id
+              AND state = 'running'
+              AND attempted_at = @attempted_at
+            """;
+
+        ReportProgress = $"""
+            UPDATE {job}
+            SET metadata = metadata || jsonb_build_object(
+                'oxbow:heartbeat_at', now(),
+                'oxbow:progress', jsonb_build_object(
+                    'percent', @percent::float8, 'message', @message::text, 'attempt', attempt, 'at', now()))
+            WHERE id = @id
+              AND state = 'running'
+              AND attempted_at = @attempted_at
             """;
 
         DeleteFinalized = $"""
             DELETE FROM {job}
             WHERE id IN (
-                SELECT id FROM {job}
+                SELECT id FROM {job} AS j
                 WHERE ((state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_horizon)
                    OR (state = 'completed' AND @completed_do_delete AND finalized_at < @completed_horizon)
                    OR (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_horizon))
+                  -- A batch's members outlive their own retention until the batch row is cleaned.
+                  AND NOT EXISTS (SELECT 1 FROM {batch} AS b WHERE b.id = j.batch_id)
                   -- A halted sequence stays halted until its job is retried or deleted.
-                  AND NOT {Halts("")}
+                  AND NOT {Halts("j.")}
                 ORDER BY id
                 LIMIT @max
             )
@@ -470,6 +634,253 @@ internal sealed class OxbowSql
             """;
 
         SequenceKeyOf = $"SELECT sequence_key FROM {job} WHERE id = @id";
+        BatchNextId = $"SELECT nextval('{schema}.{prefix}batch_id_seq')";
+
+        // The batch row is written in the same statement as its members, so no finisher can see a batch without them,
+        // whether or not the caller's connection is in a transaction.
+        InsertBatch = $"""
+            WITH jobs AS (
+            {InsertMany}
+            ),
+            new_batch AS (
+                INSERT INTO {batch} (id, total, on_complete, on_success)
+                SELECT @batch_id, count(*) FILTER (WHERE NOT unique_skipped_as_duplicate), @on_complete::jsonb, @on_success::jsonb
+                FROM jobs
+            )
+            SELECT * FROM jobs
+            """;
+
+        const string liveStates = "'available', 'pending', 'retryable', 'running', 'scheduled'";
+
+        BatchGetFinishable = $"""
+            SELECT b.id
+            FROM {batch} AS b
+            WHERE b.finalized_at IS NULL
+              AND b.id > @after
+              AND NOT EXISTS (SELECT 1 FROM {job} AS j WHERE j.batch_id = b.id AND j.state IN ({liveStates}))
+            ORDER BY b.id
+            LIMIT @max
+            """;
+
+        // The row lock and the finalized_at check make this exactly-once: a second leader running the same batch
+        // skips it while it's locked and sees it finalized afterwards. A deleted member counts as cancelled.
+        BatchFinish = $"""
+            WITH finished AS (
+                SELECT b.id, b.total, b.on_complete, b.on_success
+                FROM {batch} AS b
+                WHERE b.id = @id
+                  AND b.finalized_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM {job} AS j WHERE j.batch_id = b.id AND j.state IN ({liveStates}))
+                FOR UPDATE OF b SKIP LOCKED
+            ),
+            counts AS (
+                SELECT
+                    count(*) FILTER (WHERE j.state = 'completed') AS completed,
+                    count(*) FILTER (WHERE j.state = 'discarded') AS discarded
+                FROM {job} AS j
+                WHERE j.batch_id IN (SELECT id FROM finished)
+            ),
+            complete_job AS (
+            {InsertCallback("on_complete", "finished AS f", "TRUE", "complete")}
+            ),
+            success_job AS (
+            {InsertCallback("on_success", "finished AS f, counts AS c", "c.completed = f.total", "success")}
+            ),
+            updated AS (
+                UPDATE {batch} AS b
+                SET finalized_at = now(),
+                    completed = c.completed,
+                    discarded = c.discarded,
+                    cancelled = f.total - c.completed - c.discarded,
+                    on_complete_job_id = (SELECT id FROM complete_job),
+                    on_success_job_id = (SELECT id FROM success_job)
+                FROM finished AS f, counts AS c
+                WHERE b.id = f.id
+            )
+            SELECT queue, state FROM complete_job WHERE NOT duplicate
+            UNION ALL
+            SELECT queue, state FROM success_job WHERE NOT duplicate
+            """;
+
+        string InsertCallback(string column, string from, string condition, string callback) => $"""
+                INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states)
+                SELECT
+                    f.{column} -> 'args',
+                    f.{column} ->> 'kind',
+                    (f.{column} ->> 'max_attempts')::smallint,
+                    f.{column} -> 'metadata' || jsonb_build_object('oxbow:batch_id', f.id, 'oxbow:batch_callback', '{callback}'),
+                    (f.{column} ->> 'priority')::smallint,
+                    f.{column} ->> 'queue',
+                    coalesce((f.{column} ->> 'scheduled_at')::timestamptz, now()),
+                    CASE WHEN (f.{column} ->> 'scheduled_at')::timestamptz > now() THEN 'scheduled' ELSE 'available' END::{state},
+                    ARRAY(SELECT jsonb_array_elements_text(f.{column} -> 'tags'))::varchar(255)[],
+                    decode(f.{column} ->> 'unique_key', 'base64'),
+                    nullif((f.{column} ->> 'unique_states')::int, 0)::bit(8)
+                FROM {from}
+                WHERE f.{column} IS NOT NULL AND {condition}
+                ON CONFLICT (unique_key)
+                    WHERE unique_key IS NOT NULL
+                      AND unique_states IS NOT NULL
+                      AND {bitmask}(unique_states, state)
+                    DO UPDATE SET kind = {prefix}job.kind
+                RETURNING id, queue, state::text AS state, (xmax <> 0) AS duplicate
+            """;
+
+        // Unfinished, the counts come from the members, which the cleaner keeps while the batch row exists.
+        BatchGet = $"""
+            SELECT
+                b.id, b.created_at, b.finalized_at, b.total,
+                coalesce(b.completed, m.completed)::int,
+                coalesce(b.discarded, m.discarded)::int,
+                coalesce(b.cancelled, b.total - m.present + m.cancelled)::int,
+                b.on_complete_job_id, b.on_success_job_id
+            FROM {batch} AS b
+            CROSS JOIN LATERAL (
+                SELECT
+                    count(*) FILTER (WHERE j.state = 'completed') AS completed,
+                    count(*) FILTER (WHERE j.state = 'discarded') AS discarded,
+                    count(*) FILTER (WHERE j.state = 'cancelled') AS cancelled,
+                    count(*) AS present
+                FROM {job} AS j
+                WHERE j.batch_id = b.id AND b.finalized_at IS NULL
+            ) AS m
+            WHERE b.id = @id
+            """;
+
+        // A batch stays while its callbacks may still be running and asking about it.
+        BatchDeleteExpired = $"""
+            DELETE FROM {batch}
+            WHERE id IN (
+                SELECT b.id FROM {batch} AS b
+                WHERE b.finalized_at < @horizon
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {job} AS j
+                      WHERE j.id IN (b.on_complete_job_id, b.on_success_job_id) AND j.finalized_at IS NULL)
+                ORDER BY b.id
+                LIMIT @max
+            )
+            """;
+
+        // Durable periodic jobs. A stored schedule is a cron expression with its time zone, or an interval.
+        const string everyParam = "@every_seconds::float8 * interval '1 second'";
+
+        PeriodicJobUpsert = $"""
+            INSERT INTO {periodic} AS p (name, kind, args, options, cron, time_zone, every, next_run_at)
+            VALUES (@name, @kind, @args::jsonb, @options::jsonb, @cron, @time_zone, {everyParam}, @next_run_at)
+            ON CONFLICT (name) DO UPDATE SET
+                kind = excluded.kind,
+                args = excluded.args,
+                options = excluded.options,
+                cron = excluded.cron,
+                time_zone = excluded.time_zone,
+                every = excluded.every,
+                next_run_at = CASE
+                    WHEN (p.cron, p.time_zone, p.every) IS DISTINCT FROM (excluded.cron, excluded.time_zone, excluded.every)
+                    THEN excluded.next_run_at
+                    ELSE coalesce(p.next_run_at, excluded.next_run_at)
+                END,
+                updated_at = now()
+            WHERE NOT p.registered_in_code
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobCreate = $"""
+            INSERT INTO {periodic} AS p (name, kind, args, options, cron, time_zone, every, next_run_at)
+            VALUES (@name, @kind, @args::jsonb, @options::jsonb, @cron, @time_zone, {everyParam}, @next_run_at)
+            ON CONFLICT (name) DO NOTHING
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobPause = $"""
+            UPDATE {periodic} AS p
+            SET paused_at = coalesce(p.paused_at, now()), updated_at = now()
+            WHERE name = @name
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobLock = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} WHERE name = @name FOR UPDATE";
+
+        PeriodicJobResume = $"""
+            UPDATE {periodic} AS p
+            SET paused_at = NULL, next_run_at = @next_run_at, updated_at = now()
+            WHERE name = @name AND paused_at IS NOT NULL
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobDelete = $"DELETE FROM {periodic} AS p WHERE name = @name RETURNING {PeriodicColumns("p")}";
+
+        PeriodicJobGet = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} WHERE name = @name";
+
+        PeriodicJobList = $"""
+            SELECT {PeriodicColumns(prefix + "periodic_job")}
+            FROM {periodic}
+            WHERE @after::text IS NULL OR name > @after
+            ORDER BY name
+            LIMIT @limit
+            """;
+
+        // The leader's sync of the jobs registered in its code: create missing rows, take up schedule changes, give a
+        // resumed job its next run, and refresh the rest hourly so rows for jobs no longer in any leader's code can be told apart and deleted.
+        PeriodicJobSyncCode = $"""
+            INSERT INTO {periodic} (name, registered_in_code, cron, time_zone, every, next_run_at)
+            SELECT i.name, true, i.cron, i.time_zone, i.every_seconds * interval '1 second', i.first_run_at
+            FROM unnest(@name::text[], @cron::text[], @time_zone::text[], @every_seconds::float8[], @first_run_at::timestamptz[])
+                AS i(name, cron, time_zone, every_seconds, first_run_at)
+            ON CONFLICT (name) DO NOTHING;
+
+            UPDATE {periodic} AS p
+            SET cron = i.cron,
+                time_zone = i.time_zone,
+                every = i.every_seconds * interval '1 second',
+                next_run_at = CASE
+                    WHEN (p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                      OR p.next_run_at IS NULL
+                    THEN i.next_occurrence
+                    ELSE p.next_run_at
+                END,
+                updated_at = now()
+            FROM unnest(@name::text[], @cron::text[], @time_zone::text[], @every_seconds::float8[], @next_occurrence::timestamptz[])
+                AS i(name, cron, time_zone, every_seconds, next_occurrence)
+            WHERE p.name = i.name
+              AND p.registered_in_code
+              AND ((p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                   OR (p.next_run_at IS NULL AND i.next_occurrence IS NOT NULL AND p.paused_at IS NULL)
+                   OR p.updated_at < now() - interval '1 hour');
+
+            DELETE FROM {periodic} WHERE registered_in_code AND updated_at < now() - interval '24 hours';
+            """;
+
+        PeriodicJobCodeConflicts = $"SELECT name FROM {periodic} WHERE name = ANY(@name) AND NOT registered_in_code";
+
+        PeriodicJobGetDue = $"""
+            SELECT {PeriodicColumns(prefix + "periodic_job")}, now()
+            FROM {periodic}
+            WHERE paused_at IS NULL
+              AND next_run_at <= now()
+              AND (NOT registered_in_code OR name = ANY(@code_names))
+            ORDER BY next_run_at
+            LIMIT @max
+            """;
+
+        PeriodicJobUntilNext = $"""
+            SELECT extract(epoch FROM min(next_run_at) - now())::float8
+            FROM {periodic}
+            WHERE paused_at IS NULL
+              AND (NOT registered_in_code OR name = ANY(@code_names))
+            """;
+
+        // Guarded on the row as read, so of two leaders across a failover only one advances it and enqueues the run,
+        // and a definition changed since it was read isn't run with the old one.
+        PeriodicJobAdvance = $"""
+            UPDATE {periodic}
+            SET next_run_at = @next_run_at,
+                last_run_at = CASE WHEN @ran THEN now() ELSE last_run_at END,
+                kind = coalesce(@kind, kind)
+            WHERE name = @name
+              AND next_run_at = @expected_next_run_at
+              AND updated_at = @expected_updated_at
+              AND paused_at IS NULL
+            """;
     }
 
     public string InsertChannel { get; }
@@ -502,8 +913,24 @@ internal sealed class OxbowSql
 
     public string Get { get; }
 
-    /// <summary>Format with the keyset comparison (<c>&gt;</c> or <c>&lt;</c>) and the order (<c>ASC</c> or <c>DESC</c>).</summary>
+    public string GetMany { get; }
+
+    /// <summary>
+    /// Format with the <see cref="JobFilterSql"/> clause, the keyset comparison (<c>&gt;</c> or <c>&lt;</c>) and the
+    /// order (<c>ASC</c> or <c>DESC</c>).
+    /// </summary>
     public string ListTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string CancelManyTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string RetryManyTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string DeleteManyTemplate { get; }
+
+    public string MaxJobId { get; }
 
     public string GetCancelRequested { get; }
 
@@ -512,6 +939,10 @@ internal sealed class OxbowSql
     public string GetStuck { get; }
 
     public string RescueMany { get; }
+
+    public string Heartbeat { get; }
+
+    public string ReportProgress { get; }
 
     public string DeleteFinalized { get; }
 
@@ -549,9 +980,63 @@ internal sealed class OxbowSql
         $"({alias}sequence_key IS NOT NULL AND {alias}state IN ('cancelled', 'discarded') AND {alias}attempt > 0 " +
         $"AND (coalesce({alias}sequence_continue_on, 0) & CASE {alias}state WHEN 'cancelled' THEN 1 ELSE 2 END) = 0)";
 
+    public string BatchNextId { get; }
+
+    public string InsertBatch { get; }
+
+    public string BatchGetFinishable { get; }
+
+    public string BatchFinish { get; }
+
+    public string BatchGet { get; }
+
+    public string BatchDeleteExpired { get; }
+
+    /// <summary>
+    /// The later of a job's attempted_at and its heartbeat. The heartbeat is metadata anyone can write, so a value that
+    /// isn't a timestamp is ignored rather than cast, which would fail the whole rescue.
+    /// </summary>
+    private static string LastSeen(string alias) =>
+        $"greatest({alias}.attempted_at, CASE WHEN jsonb_typeof({alias}.metadata -> 'oxbow:heartbeat_at') = 'string' " +
+        $"AND pg_input_is_valid({alias}.metadata ->> 'oxbow:heartbeat_at', 'timestamptz') " +
+        $"THEN ({alias}.metadata ->> 'oxbow:heartbeat_at')::timestamptz END)";
+
+    public string PeriodicJobUpsert { get; }
+
+    public string PeriodicJobCreate { get; }
+
+    public string PeriodicJobPause { get; }
+
+    public string PeriodicJobLock { get; }
+
+    public string PeriodicJobResume { get; }
+
+    public string PeriodicJobDelete { get; }
+
+    public string PeriodicJobGet { get; }
+
+    public string PeriodicJobList { get; }
+
+    public string PeriodicJobSyncCode { get; }
+
+    public string PeriodicJobCodeConflicts { get; }
+
+    public string PeriodicJobGetDue { get; }
+
+    public string PeriodicJobUntilNext { get; }
+
+    public string PeriodicJobAdvance { get; }
+
+    /// <summary>The periodic job columns, in the order <see cref="PeriodicJobRowReader"/> reads them.</summary>
+    private static string PeriodicColumns(string alias) =>
+        $"{alias}.name, {alias}.registered_in_code, {alias}.kind, {alias}.args::text, {alias}.options::text, {alias}.cron, " +
+        $"{alias}.time_zone, extract(epoch FROM {alias}.every)::float8, {alias}.paused_at, {alias}.next_run_at, " +
+        $"{alias}.last_run_at, {alias}.created_at, {alias}.updated_at";
+
     /// <summary>The row columns, in the order <see cref="JobRowReader"/> reads them.</summary>
     private static string Columns(string alias) =>
         $"{alias}.id, {alias}.state::text, {alias}.attempt, {alias}.max_attempts, {alias}.attempted_at, {alias}.created_at, " +
         $"{alias}.finalized_at, {alias}.scheduled_at, {alias}.priority, {alias}.args::text, {alias}.attempted_by, " +
-        $"{alias}.errors::text[], {alias}.kind, {alias}.metadata::text, {alias}.queue, {alias}.tags::text[]";
+        $"{alias}.errors::text[], {alias}.kind, {alias}.metadata::text, {alias}.queue, {alias}.tags::text[], " +
+        $"{alias}.sequence_key";
 }

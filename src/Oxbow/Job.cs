@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Oxbow.Processing;
 
 namespace Oxbow;
 
@@ -7,6 +8,8 @@ namespace Oxbow;
 public sealed class Job<TArgs>
     where TArgs : IJobArgs
 {
+    private const int MaxProgressMessageLength = 1_000;
+
     /// <summary>Creates a job, for example to unit test a worker.</summary>
     /// <param name="row">The stored row.</param>
     /// <param name="args">The deserialized args.</param>
@@ -44,4 +47,72 @@ public sealed class Job<TArgs>
 
     /// <summary>Arbitrary JSON metadata.</summary>
     public JsonElement Metadata => Row.Metadata;
+
+    /// <summary>
+    /// The progress this attempt last reported, or <see langword="null"/>. <see cref="JobRow.Progress"/> is what was
+    /// stored when the attempt started, possibly by an earlier one.
+    /// </summary>
+    public JobProgress? Progress { get; private set; }
+
+    /// <summary>Set by the executor; absent when the job is created directly, e.g. in a unit test.</summary>
+    internal JobControl? Control { get; set; }
+
+    /// <summary>
+    /// Records that the attempt is alive, under <c>oxbow:heartbeat_at</c> in metadata. Once an attempt heartbeats, the
+    /// rescuer judges it by its last heartbeat instead of its start and timeout: it's rescued only after
+    /// <see cref="OxbowOptions.RescueStuckJobsAfter"/> without one. Calls are throttled, so call it as often as is
+    /// convenient. Does nothing outside Oxbow's executor, or once the attempt has ended.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the heartbeat is written or skipped.</returns>
+    public Task HeartbeatAsync(CancellationToken cancellationToken = default) =>
+        Control?.HeartbeatAsync(cancellationToken) ?? Task.CompletedTask;
+
+    /// <summary>
+    /// Records progress under <c>oxbow:progress</c> in metadata, readable through <see cref="IOxbowClient.GetAsync"/>.
+    /// Also counts as a heartbeat. Not throttled: every call is a write. Outside Oxbow's executor, only
+    /// <see cref="Progress"/> is updated.
+    /// </summary>
+    /// <param name="percent">How far along the work is, from 0 to 100.</param>
+    /// <param name="message">A description of the current step, at most 1,000 characters.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>A task that completes when the progress is written.</returns>
+    public Task ReportProgressAsync(double percent, string? message = null, CancellationToken cancellationToken = default)
+    {
+        if (!double.IsFinite(percent) || percent is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(percent), percent, "Progress must be between 0 and 100.");
+        }
+
+        if (message?.Length > MaxProgressMessageLength)
+        {
+            throw new ArgumentException($"A progress message may be at most {MaxProgressMessageLength} characters.", nameof(message));
+        }
+
+        Progress = new JobProgress(percent, message, Attempt, Control?.Now ?? DateTimeOffset.UtcNow);
+        return Control?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
+    }
+
+    /// <summary>The batch this job is a member or callback of.</summary>
+    public long? BatchId => Row.BatchId;
+
+    /// <summary>The output recorded with <see cref="SetOutput"/>, not yet serialized.</summary>
+    public object? Output => _output;
+
+    private volatile object? _output;
+
+    /// <summary>
+    /// Records the job's result, stored in <c>metadata.output</c> when the job completes and readable with
+    /// <see cref="JobRow.GetOutput{T}"/>. Discarded if the attempt doesn't complete. A later call replaces an earlier
+    /// one.
+    /// </summary>
+    /// <param name="output">
+    /// The result, serialized as its runtime type with the client's <c>JsonSerializerOptions</c>. At most
+    /// <see cref="JobRow.MaxOutputSize"/> bytes of JSON; a larger output fails the attempt.
+    /// </param>
+    public void SetOutput(object output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        _output = output;
+    }
 }

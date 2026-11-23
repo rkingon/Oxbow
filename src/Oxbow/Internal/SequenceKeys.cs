@@ -5,14 +5,22 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Oxbow.Internal;
 
-/// <summary>Resolves a job's sequence key: the explicit option, else <c>kind:{marked properties}</c>.</summary>
+/// <summary>
+/// Resolves a job's sequence key: the explicit option, else <c>kind:{marked properties}</c>. For an encrypted kind the
+/// marked values are replaced by the protector's keyed hash, so the column doesn't reveal them.
+/// </summary>
 internal static class SequenceKeys
 {
     public const int MaxLength = 255;
 
-    public static string? Resolve(string? explicitKey, string kind, string encodedArgs, JsonTypeInfo argsTypeInfo)
+    public static string? Resolve(
+        string? explicitKey,
+        string kind,
+        string encodedArgs,
+        JsonTypeInfo? argsTypeInfo,
+        IJobArgsProtector? protector = null)
     {
-        var key = explicitKey ?? FromAttributes(kind, encodedArgs, argsTypeInfo);
+        var key = explicitKey ?? FromAttributes(kind, encodedArgs, argsTypeInfo, protector);
         if (key is not null && (key.Length == 0 || key.Length > MaxLength))
         {
             throw new ArgumentException(
@@ -22,9 +30,10 @@ internal static class SequenceKeys
         return key;
     }
 
-    private static string? FromAttributes(string kind, string encodedArgs, JsonTypeInfo typeInfo)
+    private static string? FromAttributes(string kind, string encodedArgs, JsonTypeInfo? typeInfo, IJobArgsProtector? protector)
     {
-        if (typeInfo.Kind != JsonTypeInfoKind.Object)
+        // Raw args (stored periodic jobs) carry no attributes; only an explicit key applies.
+        if (typeInfo is null || typeInfo.Kind != JsonTypeInfoKind.Object)
         {
             return null;
         }
@@ -59,6 +68,8 @@ internal static class SequenceKeys
             writer.WriteEndObject();
         }
 
-        return kind + ":" + Encoding.UTF8.GetString(buffer.WrittenSpan);
+        return protector is null
+            ? kind + ":" + Encoding.UTF8.GetString(buffer.WrittenSpan)
+            : kind + ":hmac:" + Convert.ToHexStringLower(protector.HashUniqueKey([.. "sequence:"u8, .. buffer.WrittenSpan]));
     }
 }

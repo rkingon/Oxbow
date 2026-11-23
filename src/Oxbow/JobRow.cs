@@ -1,4 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
+using Oxbow.Internal;
 
 namespace Oxbow;
 
@@ -52,4 +55,89 @@ public sealed class JobRow
 
     /// <summary>Tags attached at insert.</summary>
     public required IReadOnlyList<string> Tags { get; init; }
+
+    /// <summary>The job's sequence key, or <see langword="null"/> if it isn't in a sequence.</summary>
+    public string? SequenceKey { get; init; }
+
+    /// <summary>
+    /// The last heartbeat (<c>oxbow:heartbeat_at</c> in <see cref="Metadata"/>), from any attempt: compare it with
+    /// <see cref="AttemptedAt"/>.
+    /// </summary>
+    public DateTimeOffset? HeartbeatAt =>
+        Metadata.ValueKind == JsonValueKind.Object
+        && Metadata.TryGetProperty("oxbow:heartbeat_at", out var value)
+        && value.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+            ? at
+            : null;
+
+    /// <summary>
+    /// The last progress reported (<c>oxbow:progress</c> in <see cref="Metadata"/>), from any attempt: compare its
+    /// <see cref="JobProgress.At"/> with <see cref="AttemptedAt"/>.
+    /// </summary>
+    public JobProgress? Progress
+    {
+        get
+        {
+            if (Metadata.ValueKind != JsonValueKind.Object
+                || !Metadata.TryGetProperty("oxbow:progress", out var value)
+                || value.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            try
+            {
+                return value.Deserialize(OxbowJsonContext.Default.JobProgress);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The batch this job is a member or callback of, from <c>metadata.oxbow:batch_id</c>; pass it to
+    /// <see cref="IOxbowClient.GetBatchAsync"/>.
+    /// </summary>
+    public long? BatchId =>
+        Metadata.ValueKind == JsonValueKind.Object
+        && Metadata.TryGetProperty("oxbow:batch_id", out var id)
+        && id.ValueKind == JsonValueKind.Number
+        && id.TryGetInt64(out var value)
+            ? value
+            : null;
+
+    /// <summary>The largest output a job may record, in bytes of UTF-8 JSON (1 MiB).</summary>
+    public const int MaxOutputSize = 1024 * 1024;
+
+    /// <summary>The output the worker recorded when the job completed (<c>metadata.output</c>), if any.</summary>
+    public JsonElement? Output =>
+        Metadata.ValueKind == JsonValueKind.Object && Metadata.TryGetProperty("output", out var output) ? output : null;
+
+    /// <summary>Deserializes <see cref="Output"/>.</summary>
+    /// <typeparam name="T">The output type.</typeparam>
+    /// <param name="options">
+    /// Serializer options, typically the client's <see cref="OxbowOptions.JsonSerializerOptions"/>. Default:
+    /// <see cref="JsonSerializerOptions.Web"/>.
+    /// </param>
+    /// <returns>The output, or <see langword="default"/> if none was recorded.</returns>
+    public T? GetOutput<T>(JsonSerializerOptions? options = null)
+    {
+        if (Output is not { } output)
+        {
+            return default;
+        }
+
+        options ??= JsonSerializerOptions.Web;
+        if (!options.IsReadOnly)
+        {
+            // As the client does: leave the caller's options mutable, and fill in a missing resolver.
+            options = new JsonSerializerOptions(options);
+            options.TypeInfoResolver ??= new DefaultJsonTypeInfoResolver();
+        }
+
+        return output.Deserialize((JsonTypeInfo<T>)options.GetTypeInfo(typeof(T)));
+    }
 }

@@ -16,6 +16,17 @@ The key is the kind plus the values of the properties marked `[SequenceKey]` (to
 verbatim and wins over the attribute, so jobs of different kinds can share a sequence. Keys are 1 to 255 characters.
 `GetInsertOptions()` on the args can compute it too.
 
+For a kind with [encrypted args](encryption.md), the attribute-derived key stores the protector's keyed hash of the
+marked values (`deliver_webhook:hmac:…`) instead of the values. An explicit `SequenceKey` is stored as given.
+
+`JobRow.SequenceKey` reads a job's key back, and `JobFilter.SequenceKey` targets one sequence in `ListAsync` and the
+bulk operations:
+
+```csharp
+var halted = await oxbow.ListAsync(new JobListQuery { SequenceKey = key, States = [JobState.Discarded] });
+await oxbow.RetryManyAsync(new JobFilter { SequenceKey = key, States = [JobState.Discarded] });
+```
+
 ## How it works
 
 - Every sequence job is inserted as `pending`. The insert takes no lock, so it never blocks other inserts for the key
@@ -55,8 +66,11 @@ never halts the sequence.
 
 ## Interactions
 
-- **Retry.** `RetryAsync` on a finished or pending sequence job puts it back to `pending`, never straight to
-  `available`, so it can't run beside the live job. Retrying a completed job re-runs it after whatever is live now.
+- **Retry.** `RetryAsync` and `RetryManyAsync` put a finished or pending sequence job back to `pending`, never
+  straight to `available`, so it can't run beside the live job. Retrying a completed job re-runs it after whatever is
+  live now. `CancelManyAsync` and `DeleteManyAsync` promote the next job of each sequence they free, as the single-job
+  calls do.
+- **Batches.** A batch member can be in a sequence; the batch counts a pending member as unfinished.
 - **Unique jobs.** Work as usual. A pending job blocks a duplicate, since the unique states always include `pending`.
 - **`InsertManyFastAsync`.** Supported: COPY writes sequence jobs as `pending` and the insert NOTIFYs their keys.
 - **Concurrent transactions.** Order is by `id`, which is assigned at insert, but a job is only promoted once it's

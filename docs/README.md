@@ -4,12 +4,16 @@
 - [Migrations](migrations.md) and [least privilege](least-privilege.md)
 - [Workers](workers.md): timeouts, snooze, self-cancel, error handling
 - [Retries](retries.md)
+- [Discard handlers](discard-handlers.md): react when a job is discarded or cancelled
+- [Managing jobs](managing-jobs.md): list filters, bulk cancel, retry and delete
 - [Cancellation](cancellation.md)
 - [Unique jobs](unique-jobs.md)
 - [Sequences](sequences.md): strict FIFO per key
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)
+- [Batches](batches.md): callbacks when a group of jobs finishes
 - [Queues](queues.md): concurrency, pause and resume
 - [Middleware](middleware.md)
+- [Args encryption](encryption.md): at rest, on ASP.NET Core Data Protection
 - [Maintenance and leader election](maintenance.md)
 - [Graceful shutdown](graceful-shutdown.md)
 - [Observability](observability.md)

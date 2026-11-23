@@ -7,7 +7,10 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Oxbow.Internal;
 
-/// <summary>Builds River-style unique keys: <c>&amp;kind=…&amp;args=…&amp;period=…&amp;queue=…</c>, hashed with SHA-256.</summary>
+/// <summary>
+/// Builds River-style unique keys: <c>&amp;kind=…&amp;args=…&amp;period=…&amp;queue=…</c>, hashed with SHA-256, or with the
+/// args protector's keyed hash when the args are encrypted.
+/// </summary>
 internal static class UniqueKeys
 {
     private const int MaxDepth = 16;
@@ -60,9 +63,10 @@ internal static class UniqueKeys
         UniqueOptions options,
         string kind,
         string encodedArgs,
-        JsonTypeInfo argsTypeInfo,
+        JsonTypeInfo? argsTypeInfo,
         string queue,
-        DateTimeOffset scheduledAt)
+        DateTimeOffset scheduledAt,
+        IJobArgsProtector? keyedHash = null)
     {
         var key = new StringBuilder();
         if (!options.ExcludeKind)
@@ -88,10 +92,11 @@ internal static class UniqueKeys
             key.Append("&queue=").Append(queue);
         }
 
-        return SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString()));
+        var bytes = Encoding.UTF8.GetBytes(key.ToString());
+        return keyedHash is null ? SHA256.HashData(bytes) : keyedHash.HashUniqueKey(bytes);
     }
 
-    private static string UniqueArgs(string encodedArgs, JsonTypeInfo typeInfo)
+    private static string UniqueArgs(string encodedArgs, JsonTypeInfo? typeInfo)
     {
         using var document = JsonDocument.Parse(encodedArgs);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -102,7 +107,7 @@ internal static class UniqueKeys
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer))
         {
-            if (!HasUniqueProperties(typeInfo, 0))
+            if (typeInfo is null || !HasUniqueProperties(typeInfo, 0))
             {
                 WriteSorted(writer, document.RootElement.EnumerateObject()
                     .DistinctBy(p => p.Name, StringComparer.Ordinal)

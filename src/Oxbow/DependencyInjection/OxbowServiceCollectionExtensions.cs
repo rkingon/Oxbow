@@ -82,6 +82,23 @@ public static class OxbowBuilderExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Adds a scoped handler called after a job is discarded or cancelled, in a new scope for each job. Handlers run in
+    /// registration order, on a background loop of the node that wrote the outcome.
+    /// </summary>
+    /// <typeparam name="THandler">The handler.</typeparam>
+    /// <param name="builder">The builder.</param>
+    /// <returns>The builder.</returns>
+    public static IOxbowBuilder AddDiscardHandler<THandler>(this IOxbowBuilder builder)
+        where THandler : class, IJobDiscardHandler
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.Services.TryAddScoped<THandler>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<DiscardHandlerRegistration, DiscardHandlerRegistration<THandler>>());
+        return builder;
+    }
+
     /// <summary>Adds singleton insert middleware. Middleware runs in registration order, outermost first.</summary>
     /// <typeparam name="TMiddleware">The middleware.</typeparam>
     /// <param name="builder">The builder.</param>

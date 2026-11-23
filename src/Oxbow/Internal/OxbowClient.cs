@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Npgsql;
 using NpgsqlTypes;
@@ -17,6 +18,8 @@ internal sealed partial class OxbowClient(
 {
     private readonly IJobInsertMiddleware[] _insertMiddleware = insertMiddleware.ToArray();
     private readonly ConcurrentDictionary<string, long> _lastNotified = new(StringComparer.Ordinal);
+
+    private const int BulkBatchSize = 1_000;
 
     public async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
@@ -179,19 +182,513 @@ internal sealed partial class OxbowClient(
         return count;
     }
 
-    /// <summary>Inserts on a connection of its own without the unknown-kind check; used by the periodic enqueuer.</summary>
-    internal async Task InsertUncheckedAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken)
+    public async Task<BatchInsertResult> InsertBatchAsync(
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
-        var jobs = Prepare(items, checkKinds: false);
+        var batch = PrepareBatch(items, options);
         var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using (connection.ConfigureAwait(false))
         {
             var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
             await using (transaction.ConfigureAwait(false))
             {
-                await InsertPreparedAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
+                var result = await InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+        }
+    }
+
+    public Task<BatchInsertResult> InsertBatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateCallerConnection(connection, transaction);
+        var batch = PrepareBatch(items, options);
+        return InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken);
+    }
+
+    public async Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.BatchGet);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("id", id);
+            var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using (reader.ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                return new Batch
+                {
+                    Id = reader.GetInt64(0),
+                    CreatedAt = reader.GetFieldValue<DateTimeOffset>(1),
+                    FinalizedAt = reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+                    Total = reader.GetInt32(3),
+                    Completed = reader.GetInt32(4),
+                    Discarded = reader.GetInt32(5),
+                    Cancelled = reader.GetInt32(6),
+                    OnCompleteJobId = reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                    OnSuccessJobId = reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                };
+            }
+        }
+    }
+
+    private PreparedBatch PrepareBatch(IEnumerable<InsertManyItem> items, BatchOptions? options)
+    {
+        var jobs = Prepare(items, checkKinds: true);
+        var now = timeProvider.GetUtcNow();
+        var onComplete = PrepareCallback(options?.OnComplete, now);
+        var onSuccess = PrepareCallback(options?.OnSuccess, now);
+        if (onComplete?.UniqueKey is { } completeKey && onSuccess?.UniqueKey is { } successKey && completeKey.AsSpan().SequenceEqual(successKey))
+        {
+            throw new ArgumentException("OnComplete and OnSuccess have the same unique key, so only one could ever be inserted.", nameof(options));
+        }
+
+        return new PreparedBatch(jobs, onComplete, onSuccess);
+    }
+
+    private JobInsertParams? PrepareCallback(BatchCallback? callback, DateTimeOffset now)
+    {
+        if (callback is null)
+        {
+            return null;
+        }
+
+        ArgumentNullException.ThrowIfNull(callback.Args);
+        return Prepare(callback.Args, callback.Options, now, checkKinds: true);
+    }
+
+    private async Task<BatchInsertResult> InsertBatchPreparedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        PreparedBatch batch,
+        CancellationToken cancellationToken)
+    {
+        long batchId;
+        var next = new NpgsqlCommand(runtime.Sql.BatchNextId, connection, transaction);
+        await using (next.ConfigureAwait(false))
+        {
+            batchId = (long)(await next.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        }
+
+        foreach (var job in batch.Jobs)
+        {
+            job.Metadata["oxbow:batch_id"] = batchId;
+        }
+
+        // Each callback goes through insert middleware now, in the caller's context, with an empty result list as for
+        // COPY; the leader inserts it later as prepared. Middleware that doesn't call next drops it.
+        async Task<string?> PrepareSpecAsync(JobInsertParams? callback, string name)
+        {
+            if (callback is null)
+            {
+                return null;
+            }
+
+            callback.Metadata["oxbow:batch_id"] = batchId;
+            callback.Metadata["oxbow:batch_callback"] = name;
+            var forwarded = false;
+            await RunInsertPipelineAsync([callback], _ =>
+            {
+                forwarded = true;
+                return Task.FromResult<IReadOnlyList<InsertResult>>([]);
+            }, cancellationToken).ConfigureAwait(false);
+            return forwarded ? CallbackSpec(callback) : null;
+        }
+
+        var insert = new BatchInsert(
+            batchId,
+            await PrepareSpecAsync(batch.OnComplete, "complete").ConfigureAwait(false),
+            await PrepareSpecAsync(batch.OnSuccess, "success").ConfigureAwait(false));
+        var inserted = false;
+        var results = await RunInsertPipelineAsync(
+            batch.Jobs,
+            context =>
+            {
+                inserted = true;
+                foreach (var job in context.Jobs)
+                {
+                    job.Metadata["oxbow:batch_id"] = batchId;
+                }
+
+                return ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken, insert);
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (!inserted)
+        {
+            throw new InvalidOperationException("Insert middleware didn't insert the batch's jobs, so the batch wasn't inserted either.");
+        }
+
+        return new BatchInsertResult(batchId, results);
+    }
+
+    private static string? CallbackSpec(JobInsertParams? job)
+    {
+        if (job is null)
+        {
+            return null;
+        }
+
+        // Checked again after middleware: a value the job table rejects would fail every finisher pass instead of now.
+        ValidateQueueName(job.Queue, allowWildcard: false);
+        if (job.Priority is < 1 or > 4 || job.MaxAttempts is < 1 or > short.MaxValue
+            || job.Tags.Any(t => t.Length > 255 || !TagPattern().IsMatch(t)))
+        {
+            throw new InvalidOperationException(
+                $"Insert middleware left batch callback '{job.Kind}' with an invalid priority, max attempts or tag.");
+        }
+
+        var tags = new JsonArray();
+        foreach (var tag in job.Tags)
+        {
+            tags.Add(tag);
+        }
+
+        return new JsonObject
+        {
+            ["kind"] = job.Kind,
+            ["args"] = JsonNode.Parse(job.EncodedArgs!),
+            ["queue"] = job.Queue,
+            ["priority"] = job.Priority,
+            ["max_attempts"] = job.MaxAttempts,
+            ["metadata"] = job.Metadata.DeepClone(),
+            ["tags"] = tags,
+            ["scheduled_at"] = job.ScheduledAt?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'", CultureInfo.InvariantCulture),
+            ["unique_key"] = job.UniqueKey is null ? null : Convert.ToBase64String(job.UniqueKey),
+            ["unique_states"] = job.UniqueStates,
+        }.ToJsonString();
+    }
+
+    private sealed record PreparedBatch(List<JobInsertParams> Jobs, JobInsertParams? OnComplete, JobInsertParams? OnSuccess);
+
+    private sealed record BatchInsert(long Id, string? OnComplete, string? OnSuccess);
+
+    /// <summary>Prepares a run of a periodic job registered in code, without the unknown-kind check.</summary>
+    internal JobInsertParams PreparePeriodicRun(string name, IJobArgs args, InsertOptions? options)
+    {
+        var job = Prepare(args, options, timeProvider.GetUtcNow(), checkKinds: false);
+        job.Metadata[PeriodicJobNames.MetadataKey] = name;
+        return job;
+    }
+
+    /// <summary>
+    /// Prepares a run of a stored periodic job, without the unknown-kind check. With a worker for the kind on this node,
+    /// the args go through their type like any insert; otherwise they're inserted as stored. Stored args that are
+    /// encrypted are decrypted here, and the run is encrypted again whatever this node knows of the kind.
+    /// </summary>
+    internal JobInsertParams PreparePeriodicRun(string name, string kind, string storedArgs, InsertOptions? options)
+    {
+        var now = timeProvider.GetUtcNow();
+        var json = storedArgs;
+        var encrypted = false;
+        using (var stored = JsonDocument.Parse(storedArgs))
+        {
+            if (ArgsEnvelope.IsSealed(stored.RootElement))
+            {
+                json = ArgsEnvelope.Open(kind, stored.RootElement, runtime.ArgsProtector, $"periodic job '{name}'").GetRawText();
+                encrypted = true;
+            }
+        }
+
+        JobInsertParams job;
+        if (workers.Find(kind) is { } registration)
+        {
+            var args = JsonSerializer.Deserialize(json, runtime.Json.GetTypeInfo(registration.ArgsType)) as IJobArgs
+                ?? throw new JsonException($"Args of periodic job '{name}' deserialized to null.");
+            job = Prepare(args, options, now, checkKinds: false, encrypt: encrypted);
+        }
+        else
+        {
+            job = Prepare(new RawJobArgs(), kind, json, typeInfo: null, argsDefaults: null, options, now, encryptKind: encrypted);
+        }
+
+        job.Metadata[PeriodicJobNames.MetadataKey] = name;
+        return job;
+    }
+
+    public Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        IJobArgs args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (kind, json) = SerializePeriodicArgs(args);
+        return StorePeriodicJobAsync(replace: false, name, schedule, kind, json, options, cancellationToken);
+    }
+
+    public Task<PeriodicJobRow> CreatePeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        JsonElement args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        StorePeriodicJobAsync(replace: false, name, schedule, kind, RawPeriodicArgs(kind, args), options, cancellationToken);
+
+    public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        IJobArgs args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (kind, json) = SerializePeriodicArgs(args);
+        return StorePeriodicJobAsync(replace: true, name, schedule, kind, json, options, cancellationToken);
+    }
+
+    public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        JsonElement args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        StorePeriodicJobAsync(replace: true, name, schedule, kind, RawPeriodicArgs(kind, args), options, cancellationToken);
+
+    private (string Kind, string Json) SerializePeriodicArgs(IJobArgs args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var argsType = args.GetType();
+        return (JobKinds.Get(argsType).Kind, JsonSerializer.Serialize(args, runtime.Json.GetTypeInfo(argsType)));
+    }
+
+    private static string RawPeriodicArgs(string kind, JsonElement args)
+    {
+        if (string.IsNullOrWhiteSpace(kind) || kind.Length >= 128)
+        {
+            throw new ArgumentException($"Job kind '{kind}' must be 1 to 127 characters and not blank.", nameof(kind));
+        }
+
+        if (args.ValueKind == JsonValueKind.Undefined)
+        {
+            throw new ArgumentException("Args must be a JSON value.", nameof(args));
+        }
+
+        return args.GetRawText();
+    }
+
+    private async Task<PeriodicJobRow> StorePeriodicJobAsync(
+        bool replace,
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        string json,
+        InsertOptions? options,
+        CancellationToken cancellationToken)
+    {
+        ValidatePeriodicJobName(name);
+        ArgumentNullException.ThrowIfNull(schedule);
+        if (options?.ScheduledAt is not null)
+        {
+            throw new ArgumentException("A periodic job's options can't set ScheduledAt; each run is scheduled by the schedule.", nameof(options));
+        }
+
+        // Stored by ID, so the leader must be able to find it again.
+        if (schedule.TimeZone is { } timeZone && !TimeZoneInfo.TryFindSystemTimeZoneById(timeZone.Id, out _))
+        {
+            throw new ArgumentException($"Time zone '{timeZone.Id}' isn't a system time zone, so it can't be stored.", nameof(schedule));
+        }
+
+        CheckKind(kind);
+        JobInsertParams run;
+        try
+        {
+            // Fails now on anything that would fail every run: options, and args a local worker can't read.
+            run = PreparePeriodicRun(name, kind, json, options);
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"The args don't deserialize to the args type of kind '{kind}': {ex.Message}", ex);
+        }
+
+        // Stored encrypted whenever a run would be, so the schedule doesn't keep in plaintext what its jobs don't.
+        if (ArgsEnvelope.IsSealed(run.EncodedArgs!))
+        {
+            json = ArgsEnvelope.Seal(runtime.ArgsProtector!.Protect(kind, json));
+        }
+
+        var command = runtime.DataSource.CreateCommand(replace ? runtime.Sql.PeriodicJobUpsert : runtime.Sql.PeriodicJobCreate);
+        PeriodicJobRow? row;
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            command.Parameters.AddWithValue("kind", kind);
+            command.Parameters.AddWithValue("args", json);
+            command.Parameters.Add(Text("options", options is null
+                ? null
+                : JsonSerializer.Serialize(options, PeriodicJsonContext.Default.InsertOptions)));
+            AddSchedule(command, schedule);
+            command.Parameters.Add(Timestamp("next_run_at", schedule.GetNextOccurrence(timeProvider.GetUtcNow())));
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            row = rows.Count == 0 ? null : rows[0];
+        }
+
+        if (row is null)
+        {
+            throw replace
+                ? new InvalidOperationException(
+                    $"Periodic job '{name}' is registered in code, so it can't be replaced at runtime. Choose another name.")
+                : new PeriodicJobExistsException(name);
+        }
+
+        await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        return row;
+    }
+
+    public Task<PeriodicJobRow?> PausePeriodicJobAsync(string name, CancellationToken cancellationToken = default) =>
+        ChangePeriodicJobAsync(runtime.Sql.PeriodicJobPause, name, cancellationToken);
+
+    public async Task<PeriodicJobRow?> ResumePeriodicJobAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ValidatePeriodicJobName(name);
+        PeriodicJobRow? row;
+        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using (connection.ConfigureAwait(false))
+        {
+            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (transaction.ConfigureAwait(false))
+            {
+                var select = new NpgsqlCommand(runtime.Sql.PeriodicJobLock, connection, transaction);
+                await using (select.ConfigureAwait(false))
+                {
+                    select.Parameters.AddWithValue("name", name);
+                    var rows = await PeriodicJobRowReader.ReadAllAsync(select, cancellationToken).ConfigureAwait(false);
+                    if (rows.Count == 0 || rows[0].PausedAt is null)
+                    {
+                        return rows.Count == 0 ? null : rows[0];
+                    }
+
+                    row = rows[0];
+                }
+
+                var update = new NpgsqlCommand(runtime.Sql.PeriodicJobResume, connection, transaction);
+                await using (update.ConfigureAwait(false))
+                {
+                    update.Parameters.AddWithValue("name", name);
+                    // A code-registered job's schedule lives in the leader's code (its time zone may not even be a
+                    // system one), so the leader's sync fills in the next run.
+                    update.Parameters.Add(Timestamp("next_run_at", row.RegisteredInCode
+                        ? null
+                        : ParseSchedule(row).GetNextOccurrence(timeProvider.GetUtcNow())));
+                    row = (await PeriodicJobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))[0];
+                }
+
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        return row;
+    }
+
+    public Task<PeriodicJobRow?> DeletePeriodicJobAsync(string name, CancellationToken cancellationToken = default) =>
+        ChangePeriodicJobAsync(runtime.Sql.PeriodicJobDelete, name, cancellationToken);
+
+    public async Task<PeriodicJobRow?> GetPeriodicJobAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ValidatePeriodicJobName(name);
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobGet);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            return rows.Count == 0 ? null : rows[0];
+        }
+    }
+
+    public async Task<PeriodicJobListResult> ListPeriodicJobsAsync(PeriodicJobListQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(query.Limit, 10_000);
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobList);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.Add(Text("after", query.Cursor));
+            command.Parameters.AddWithValue("limit", query.Limit);
+            var jobs = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            return new PeriodicJobListResult(jobs, jobs.Count == query.Limit ? jobs[^1].Name : null);
+        }
+    }
+
+    private static PeriodicSchedule ParseSchedule(PeriodicJobRow row)
+    {
+        try
+        {
+            return PeriodicSchedule.FromStored(row.CronExpression, row.TimeZoneId, row.Interval?.TotalSeconds);
+        }
+        catch (Exception ex) when (PeriodicSchedule.IsUnreadable(ex))
+        {
+            throw new InvalidOperationException($"Periodic job '{row.Name}' has a schedule this node can't read: {ex.Message}", ex);
+        }
+    }
+
+    private async Task<PeriodicJobRow?> ChangePeriodicJobAsync(string sql, string name, CancellationToken cancellationToken)
+    {
+        ValidatePeriodicJobName(name);
+        PeriodicJobRow? row;
+        var command = runtime.DataSource.CreateCommand(sql);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            row = rows.Count == 0 ? null : rows[0];
+        }
+
+        if (row is not null)
+        {
+            await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return row;
+    }
+
+    /// <summary>Wakes the leader's periodic enqueuer; without it, the change is seen within a scheduler interval.</summary>
+    private async Task NotifyPeriodicJobChangedAsync(CancellationToken cancellationToken)
+    {
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.Notify);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
+            command.Parameters.Add(TextArray("payloads", [JsonSerializer.Serialize(
+                new ControlPayload(ControlPayload.PeriodicJobChanged, null, null, null, null),
+                OxbowJsonContext.Default.ControlPayload)]));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static void AddSchedule(NpgsqlCommand command, PeriodicSchedule schedule)
+    {
+        command.Parameters.Add(Text("cron", schedule.Expression));
+        command.Parameters.Add(Text("time_zone", schedule.TimeZone?.Id));
+        command.Parameters.Add(new NpgsqlParameter("every_seconds", NpgsqlDbType.Double)
+        {
+            Value = schedule.Interval is { } interval ? interval.TotalSeconds : DBNull.Value,
+        });
+    }
+
+    internal static NpgsqlParameter Timestamp(string name, DateTimeOffset? value) =>
+        new(name, NpgsqlDbType.TimestampTz) { Value = value is { } at ? at.UtcDateTime : DBNull.Value };
+
+    private static NpgsqlParameter Text(string name, string? value) =>
+        new(name, NpgsqlDbType.Text) { Value = (object?)value ?? DBNull.Value };
+
+    private static void ValidatePeriodicJobName(string name)
+    {
+        if (!PeriodicJobNames.IsValid(name))
+        {
+            throw new ArgumentException($"Periodic job name '{name}' must be 1 to 255 characters and not blank.", nameof(name));
         }
     }
 
@@ -249,18 +746,15 @@ internal sealed partial class OxbowClient(
                 : throw new ArgumentException("The cursor is not valid.", nameof(query));
         }
 
-        var sql = string.Format(
-            CultureInfo.InvariantCulture,
-            runtime.Sql.ListTemplate,
-            query.Descending ? "<" : ">",
-            query.Descending ? "DESC" : "ASC");
-
-        var command = runtime.DataSource.CreateCommand(sql);
+        var command = runtime.DataSource.CreateCommand();
         await using (command.ConfigureAwait(false))
         {
-            command.Parameters.Add(TextArray("states", query.States?.Select(JobStates.ToDb).ToArray()));
-            command.Parameters.Add(TextArray("queues", query.Queues?.ToArray()));
-            command.Parameters.Add(TextArray("kinds", query.Kinds?.ToArray()));
+            command.CommandText = string.Format(
+                CultureInfo.InvariantCulture,
+                runtime.Sql.ListTemplate,
+                JobFilterSql.Where(query, runtime.Sql.StateTypeName, command.Parameters),
+                query.Descending ? "<" : ">",
+                query.Descending ? "DESC" : "ASC");
             command.Parameters.Add(new NpgsqlParameter("after", NpgsqlDbType.Bigint) { Value = (object?)after ?? DBNull.Value });
             command.Parameters.AddWithValue("limit", query.Limit);
             var jobs = await JobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
@@ -268,6 +762,107 @@ internal sealed partial class OxbowClient(
                 ? jobs[^1].Id.ToString(CultureInfo.InvariantCulture)
                 : null;
             return new JobListResult(jobs, nextCursor);
+        }
+    }
+
+    public async Task<CancelManyResult> CancelManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (cancelled, requested) = await ManyAsync(runtime.Sql.CancelManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new CancelManyResult(cancelled, requested);
+    }
+
+    public async Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (retried, skipped) = await ManyAsync(runtime.Sql.RetryManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new RetryManyResult(retried, skipped);
+    }
+
+    public async Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
+        (await ManyAsync(runtime.Sql.DeleteManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
+
+    private async Task<(long Affected, long Other)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (filter is JobListQuery)
+        {
+            throw new ArgumentException(
+                "Bulk operations act on every matching job, not a page, so they don't take a JobListQuery. Pass a JobFilter.",
+                nameof(filter));
+        }
+
+        if (!filter.All && JobFilterSql.MatchesEverything(filter))
+        {
+            throw new ArgumentException(
+                "The filter matches every job. Set a filter, or set JobFilter.All to act on every job.", nameof(filter));
+        }
+
+        long until;
+        var max = runtime.DataSource.CreateCommand(runtime.Sql.MaxJobId);
+        await using (max.ConfigureAwait(false))
+        {
+            until = (long)(await max.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        }
+
+        long after = 0, affected = 0, other = 0;
+        while (true)
+        {
+            var batch = await ManyBatchAsync(template, filter, after, until, cancellationToken).ConfigureAwait(false);
+            affected += batch.Affected;
+            other += batch.Other;
+            if (batch.Scanned < BulkBatchSize)
+            {
+                return (affected, other);
+            }
+
+            after = batch.LastId;
+        }
+    }
+
+    private async Task<(long Scanned, long LastId, long Affected, long Other)> ManyBatchAsync(
+        string template,
+        JobFilter filter,
+        long after,
+        long until,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var command = runtime.DataSource.CreateCommand();
+            await using (command.ConfigureAwait(false))
+            {
+                command.CommandText = string.Format(
+                    CultureInfo.InvariantCulture,
+                    template,
+                    JobFilterSql.Where(filter, runtime.Sql.StateTypeName, command.Parameters));
+                command.Parameters.AddWithValue("after", after);
+                command.Parameters.AddWithValue("until", until);
+                command.Parameters.AddWithValue("limit", BulkBatchSize);
+                command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
+                try
+                {
+                    var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                    await using (reader.ConfigureAwait(false))
+                    {
+                        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                        var result = (
+                            reader.GetInt64(0),
+                            reader.IsDBNull(1) ? after : reader.GetInt64(1),
+                            reader.GetInt64(2),
+                            reader.GetInt64(3));
+                        var freedSequences = reader.IsDBNull(4) ? [] : reader.GetFieldValue<string[]>(4);
+                        await reader.DisposeAsync().ConfigureAwait(false);
+                        await SequencePromoter.PromoteAsync(runtime, freedSequences, cancellationToken).ConfigureAwait(false);
+                        return result;
+                    }
+                }
+
+                // Batches lock in ID order but the completer doesn't, so the two can deadlock on running jobs. A unique
+                // violation means a bulk retry raced a newly committed holder of a key, which the rerun skips.
+                catch (PostgresException ex) when (
+                    (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.UniqueViolation) && attempt < 3)
+                {
+                }
+            }
         }
     }
 
@@ -329,19 +924,42 @@ internal sealed partial class OxbowClient(
         return jobs;
     }
 
-    private JobInsertParams Prepare(IJobArgs args, InsertOptions? options, DateTimeOffset now, bool checkKinds)
+    private JobInsertParams Prepare(IJobArgs args, InsertOptions? options, DateTimeOffset now, bool checkKinds, bool encrypt = false)
     {
         var argsType = args.GetType();
         var kind = JobKinds.Get(argsType).Kind;
-        if (checkKinds && !workers.IsEmpty && !runtime.Options.SkipUnknownKindCheck && workers.Find(kind) is null)
+        if (checkKinds)
+        {
+            CheckKind(kind);
+        }
+
+        var typeInfo = runtime.Json.GetTypeInfo(argsType);
+        return Prepare(
+            args, kind, JsonSerializer.Serialize(args, typeInfo), typeInfo, args.GetInsertOptions(), options, now,
+            encrypt || ArgsEnvelope.IsMarked(argsType));
+    }
+
+    private void CheckKind(string kind)
+    {
+        if (!workers.IsEmpty && !runtime.Options.SkipUnknownKindCheck && workers.Find(kind) is null)
         {
             throw new InvalidOperationException(
                 $"Job kind '{kind}' has no worker registered on this client. Register one with AddWorker, or set " +
                 "OxbowOptions.SkipUnknownKindCheck if another service works it.");
         }
+    }
 
-        var argsDefaults = args.GetInsertOptions();
-        var typeInfo = runtime.Json.GetTypeInfo(argsType);
+    // A null typeInfo means raw args, which are unique by the whole object.
+    private JobInsertParams Prepare(
+        IJobArgs args,
+        string kind,
+        string encodedArgs,
+        JsonTypeInfo? typeInfo,
+        InsertOptions? argsDefaults,
+        InsertOptions? options,
+        DateTimeOffset now,
+        bool encryptKind)
+    {
         var job = new JobInsertParams(args, kind)
         {
             Queue = options?.Queue ?? argsDefaults?.Queue ?? "default",
@@ -380,27 +998,44 @@ internal sealed partial class OxbowClient(
         }
 
         job.Scheduled = job.ScheduledAt > now;
-        job.EncodedArgs = JsonSerializer.Serialize(args, typeInfo);
+        job.EncodedArgs = encodedArgs;
+
+        var protector = runtime.Options.EncryptAllArgs || encryptKind
+            ? runtime.ArgsProtector ?? throw new InvalidOperationException(
+                $"Job kind '{kind}' encrypts its args, but no IJobArgsProtector is registered. Call AddArgsEncryption() from Oxbow.DataProtection.")
+            : null;
 
         var unique = options?.Unique ?? argsDefaults?.Unique;
         if (unique is not null && !UniqueKeys.IsEmpty(unique))
         {
             UniqueKeys.Validate(unique);
-            job.UniqueKey = UniqueKeys.Build(unique, kind, job.EncodedArgs, typeInfo, job.Queue, job.ScheduledAt ?? now);
+            job.UniqueKey = UniqueKeys.Build(
+                unique, kind, job.EncodedArgs, typeInfo, job.Queue, job.ScheduledAt ?? now, unique.ByArgs ? protector : null);
             job.UniqueStates = UniqueKeys.StatesBitmask(unique);
         }
 
-        job.SequenceKey = SequenceKeys.Resolve(options?.SequenceKey ?? argsDefaults?.SequenceKey, kind, job.EncodedArgs, typeInfo);
+        job.SequenceKey = SequenceKeys.Resolve(options?.SequenceKey ?? argsDefaults?.SequenceKey, kind, job.EncodedArgs, typeInfo, protector);
         job.SequenceContinueOn = options?.SequenceContinueOn ?? argsDefaults?.SequenceContinueOn ?? SequenceContinueOn.None;
         if ((job.SequenceContinueOn & ~(SequenceContinueOn.Cancelled | SequenceContinueOn.Discarded)) != 0)
         {
             throw new ArgumentException($"SequenceContinueOn value {(int)job.SequenceContinueOn} is not valid.", nameof(options));
         }
 
+        if (protector is not null)
+        {
+            // Envelope safety on older nodes relies on args being an object: a string-reading converter would accept it.
+            if (!job.EncodedArgs.StartsWith('{'))
+            {
+                throw new ArgumentException($"Job kind '{kind}' encrypts its args, so they must serialize to a JSON object.", nameof(args));
+            }
+
+            job.EncodedArgs = ArgsEnvelope.Seal(protector.Protect(kind, job.EncodedArgs));
+        }
+
         return job;
     }
 
-    private Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
+    internal Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         List<JobInsertParams> jobs,
@@ -448,7 +1083,8 @@ internal sealed partial class OxbowClient(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         IReadOnlyList<JobInsertParams> jobs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BatchInsert? batch = null)
     {
         foreach (var job in jobs)
         {
@@ -456,7 +1092,7 @@ internal sealed partial class OxbowClient(
         }
 
         var results = new List<InsertResult>(jobs.Count);
-        var command = new NpgsqlCommand(runtime.Sql.InsertMany, connection, transaction);
+        var command = new NpgsqlCommand(batch is null ? runtime.Sql.InsertMany : runtime.Sql.InsertBatch, connection, transaction);
         await using (command.ConfigureAwait(false))
         {
             command.Parameters.Add(TextArray("args", jobs.Select(j => j.EncodedArgs!).ToArray()));
@@ -481,13 +1117,19 @@ internal sealed partial class OxbowClient(
             {
                 Value = jobs.Select(SequenceContinueOnDb).ToArray(),
             });
+            command.Parameters.Add(new NpgsqlParameter("batch_id", NpgsqlDbType.Bigint) { Value = (object?)batch?.Id ?? DBNull.Value });
+            if (batch is not null)
+            {
+                command.Parameters.Add(new NpgsqlParameter("on_complete", NpgsqlDbType.Text) { Value = (object?)batch.OnComplete ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter("on_success", NpgsqlDbType.Text) { Value = (object?)batch.OnSuccess ?? DBNull.Value });
+            }
 
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    results.Add(new InsertResult(JobRowReader.Read(reader), reader.GetBoolean(16)));
+                    results.Add(new InsertResult(JobRowReader.Read(reader), reader.GetBoolean(17)));
                 }
             }
         }

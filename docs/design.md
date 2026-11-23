@@ -83,6 +83,10 @@ CREATE TABLE {s}.{p}queue (name text PRIMARY KEY, created_at, metadata jsonb, pa
 CREATE TABLE {s}.{p}migration (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 ```
 
+Version 2 adds, for [batches](batches.md), `{p}batch` (counts, prepared callbacks and their job IDs; partial indexes on
+unfinished and finished rows) and a nullable `{p}job.batch_id` with `{p}job_batch_idx (batch_id, state) WHERE batch_id
+IS NOT NULL`, which serves both the finisher's "any live member?" probe and the progress aggregate.
+
 The `{p}migration` table is a version marker that each script writes to. Nothing reads it as a migration runner. At
 startup the client checks `max(version)` against the version it requires and fails fast with a message naming the
 missing versions and how to get their SQL. It never applies them.
@@ -116,6 +120,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}job, {s}.{p}queue, {s}.{p}leader 
 GRANT SELECT ON {s}.{p}migration TO {role};
 GRANT USAGE ON SEQUENCE {s}.{p}job_id_seq TO {role};
 GRANT EXECUTE ON FUNCTION {s}.{p}job_state_in_bitmask(bit(8), {s}.{p}job_state) TO {role};
+GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}periodic_job TO {role};
 ```
 
 LISTEN/NOTIFY needs no grant. The runtime never runs DDL, never creates temp tables, never calls `SET` (or
@@ -172,6 +177,7 @@ public sealed class SendEmailWorker(IEmailSender sender) : IWorker<SendEmail>
 - **Unique by selected properties:** a `[UniqueKey]` attribute, found through `JsonPropertyInfo.AttributeProvider`, which
   source generation also populates. The key string follows River (`&kind=…&args={sorted}&period=…&queue=…`), hashed with
   SHA-256. Keys are ordinally sorted, and the walk recurses into nested objects the way River's struct-tag walk does.
+  When an encrypted kind is unique by args, the protector's HMAC replaces SHA-256 ([encryption](encryption.md)).
 - **Control flow from a worker** uses exceptions, which is the .NET equivalent of River's sentinel errors:
   `throw new JobSnoozeException(TimeSpan)` and `throw new JobCancelException(reason)`.
 
@@ -204,7 +210,10 @@ builder.Services.AddOxbow(o =>
 | `InsertManyAsync(IEnumerable<InsertManyItem>, ct)` and the connection/transaction overload | Multi-row `INSERT … SELECT unnest(…)` with unique support; returns rows (see bulk insert). |
 | `CancelAsync(id, ct)` | Not started: becomes cancelled immediately. Running: `cancel_attempted_at` is set and a control NOTIFY goes out. Finalized: returned as is. |
 | `RetryAsync(id, ct)`, `DeleteAsync(id, ct)`, `GetAsync(id, ct)` | River semantics. Delete and retry never touch a running job. |
-| `ListAsync(JobListQuery, ct)` | Filters (kinds, queues, states), ascending or descending by ID, keyset cursor. |
+| `ListAsync(JobListQuery, ct)` | Filters (`JobFilter`: kinds, queues, states, batch, metadata containment, tags), ascending or descending by ID, keyset cursor. |
+| `CancelManyAsync(JobFilter, ct)`, `RetryManyAsync(JobFilter, ct)`, `DeleteManyAsync(JobFilter, ct)` | The single-job semantics over every match, 1,000 jobs per statement in ID order up to the highest ID at the start, each batch its own transaction. A filter matching everything needs `All = true`; a `JobListQuery` is rejected, since its paging would suggest only a page is affected. Bulk cancel sends one control NOTIFY per queue per 300 running jobs (`{action:"cancel", queue, job_ids}`). Bulk retry skips, and counts, jobs whose unique key another live job holds. Returns counts. |
+| `InsertBatchAsync(items, BatchOptions?, ct)` and the connection/transaction overload | The batch row and its jobs in one statement (`WITH jobs AS (INSERT …) INSERT INTO {p}batch …`), so it's atomic even in autocommit. Callbacks are prepared and stored on the batch row. |
+| `GetBatchAsync(id, ct)` | Progress: aggregated from members until finished, frozen on the batch row after. |
 | `PauseQueueAsync(name, ct)`, `ResumeQueueAsync(name, ct)` | Updates the `{p}queue` row and sends a control NOTIFY in one statement; `"*"` means all queues. |
 
 `InsertResult` is `(JobRow Job, bool UniqueSkippedAsDuplicate)`. EF: `client.InsertAsync(dbContext, args, …)` uses
@@ -264,7 +273,7 @@ producer needs no locks:
   increments `attempt` and appends the node ID to `attempted_by` (capped at 100). Queues are the routing boundary: a
   node that shouldn't take some work doesn't run that queue;
 - each job runs on its own task with its own linked `CancellationTokenSource`;
-- cancel requests come in by NOTIFY (`{action:"cancel", job_id, queue}`), with a poll of `cancel_attempted_at` for
+- cancel requests come in by NOTIFY (`{action:"cancel", job_id, queue}`, or `job_ids` from a bulk cancel), with a poll of `cancel_attempted_at` for
   running IDs as backup (every 1 min, or 2 s in poll-only mode). A cancel that arrives mid-fetch is held and applied
   once the job starts, as in River;
 - pause and resume come from control NOTIFYs plus a 2 s poll of the `{p}queue` row. While paused, the producer doesn't
@@ -273,7 +282,8 @@ producer needs no locks:
 
 **Executor.** It creates a scope, resolves `IWorker<TArgs>`, deserializes the args, builds the middleware pipeline, runs
 the worker, maps the outcome to a state update and hands it to the completer. Exceptions are caught, so a worker can
-never take the host down. A row whose args fail to deserialize is recorded as a failed attempt and retried, as in River.
+never take the host down. A row whose args fail to deserialize, or to decrypt, is recorded as a failed attempt and
+retried, as in River. Encrypted args (the JSON string `"oxbow:enc:v1:…"`) are decrypted by `IJobArgsProtector` just before deserializing.
 A kind with no registered worker is handled the River way: the attempt fails with `UnknownJobKindException` in `errors`
 and retries with backoff. A rolling deploy heals itself, and a kind that's really gone ends up visibly `discarded` after
 max attempts.
@@ -283,6 +293,13 @@ every 50 ms or at 5,000 rows, makes workers wait when the backlog reaches 20,000
 times. A job's slot is freed once its outcome is queued; the row stays `running` until the batch is written, so it
 can't be fetched twice. Shutdown drains the queue. A node that dies with queued outcomes leaves those jobs to the
 rescuer.
+
+**Discard handlers.** When an `IJobDiscardHandler` is registered, the executor attaches a continuation to the
+completer's write and, if the state written is `discarded` or `cancelled` (including a retry that `cancel_attempted_at`
+turned into a cancellation), queues the job for its handlers. The rescuer and the scheduler queue their own discards
+and cancellations on the leader. A background loop reads the final rows, then calls the handlers in a fresh scope per
+job; the worker slot is long gone by then. Shutdown waits 5 s for queued calls after the completer drains, then
+cancels and drops the rest. See [discard-handlers.md](discard-handlers.md).
 
 **Elector** (River's `leadership/elector.go`). Every 5 s ±1 s, a follower runs `DELETE expired; INSERT … ON CONFLICT
 (name) DO NOTHING RETURNING *` in one transaction. The TTL is the interval plus 10 s, and a leader trusts its term only
@@ -295,20 +312,27 @@ which wakes the followers at once.
 | Service | Default | Behavior (River parity) |
 |---|---|---|
 | Scheduler | every 5 s | Moves due `scheduled` and `retryable` jobs to `available`, discarding unique-key conflicts as River's `JobSchedule` does, then NOTIFYs the affected queues. |
-| Rescuer | every 30 s, after 1 h | Takes `running` jobs with `attempted_at` older than the horizon. If cancel was attempted, they become cancelled; still inside their own timeout (when the leader knows the kind), left alone; otherwise retried with backoff or discarded by attempts. A kind the leader has no worker for is retried with the global policy, not discarded (see differences). Increments `metadata.oxbow:rescue_count`. |
-| Job cleaner | every 30 s | Deletes `completed` older than 24 h, `cancelled` older than 24 h and `discarded` older than 7 d, in batches. A retention of `Timeout.InfiniteTimeSpan` keeps them forever. |
+| Rescuer | every 30 s, after 1 h | Takes `running` jobs whose later of `attempted_at` and `metadata.oxbow:heartbeat_at` is older than the horizon. If cancel was attempted, they become cancelled; if the attempt heartbeated, rescued; still inside their own timeout (when the leader knows the kind), left alone; otherwise retried with backoff or discarded by attempts. A kind the leader has no worker for is retried with the global policy, not discarded (see differences). Increments `metadata.oxbow:rescue_count`. |
+| Job cleaner | every 30 s | Deletes `completed` older than 24 h, `cancelled` older than 24 h and `discarded` older than 7 d, in batches. A retention of `Timeout.InfiniteTimeSpan` keeps them forever. Skips members of a `{p}batch` row that still exists. |
 | Queue cleaner | every 1 h | Deletes `{p}queue` rows not updated for 24 h. |
-| Periodic enqueuer | timer | See below. |
+| Batch finisher | every 1 s | For each unfinished batch with no live member, one statement locks the batch row (`FOR UPDATE SKIP LOCKED`, rechecking `finalized_at IS NULL`), counts members, inserts the prepared callbacks and freezes the counts. See [batches](batches.md). |
+| Batch cleaner | every 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callback jobs are finalized or gone. |
+| Periodic enqueuer | due time, at most `SchedulerInterval` | See below. |
 | Queue depth | every 10 s | `count(*)` by queue and state, published as an observable gauge. |
 | Sequencer | every 5 s, and on insert NOTIFYs | Promotes the next `pending` job of each free sequence; see [Sequences](#sequences). |
 
 Maintenance runs as the runtime role, so River's reindexer is left out (`REINDEX` needs ownership).
 
-**Periodic jobs.** These are registered in options: `PeriodicSchedule.Every(TimeSpan)` or `PeriodicSchedule.Cron(expr,
-TimeZoneInfo?)` (Cronos), a constructor returning `IJobArgs` plus optional `InsertOptions`, and `runOnStart`. Only the
-leader enqueues them. The next-run times live in memory and are recomputed when a node gains leadership, so a failover can
-skip or repeat a run. As River's docs advise, pair periodic jobs with `Unique.ByPeriod` when repeats matter. Run-on-start
-jobs are enqueued when the enqueuer starts, which on a failover means the new leader enqueues them too.
+**Periodic jobs.** These are registered in options or stored in `{p}periodic_job` through the client. The schedule is
+`PeriodicSchedule.Every(TimeSpan)` or `PeriodicSchedule.Cron(expr, TimeZoneInfo?)` (Cronos). Every periodic job has a
+row keyed by name, and the row holds its `next_run_at` and `last_run_at`. A row created at runtime also holds its kind,
+args, options and schedule. For a job registered in code, the leader syncs the row's schedule from its registration. The
+enqueuer asks the database what's due (`next_run_at <= now()`, not paused). For each due run, one transaction advances
+`next_run_at` with `UPDATE … WHERE next_run_at = @read AND updated_at = @read` and inserts the job through the normal
+pipeline. If the guard misses, the transaction rolls back and nothing is inserted, so a failover can neither skip nor
+repeat a run. The enqueuer then sleeps until the next `next_run_at`, for at most `SchedulerInterval`. A NOTIFY on the
+control channel, sent after every runtime change, wakes it sooner. After downtime it makes one catch-up run per job.
+Run-on-start applies only to a job's first run. See [periodic jobs](scheduled-and-periodic-jobs.md#periodic).
 
 ## Sequences
 
@@ -321,9 +345,10 @@ index, and retries on a fresh snapshot (up to three times, then leaves it to the
 
 Promoters: the completer after writing a batch that finished sequence jobs; the leader on `{s}.{p}sequence` NOTIFYs,
 which inserts send in the inserting transaction (payload: the key); the client after `CancelAsync`, `RetryAsync` or
-`DeleteAsync` on a sequence job; and the leader's sweep every `SchedulerInterval`, which walks the keys with pending
+`DeleteAsync` (and their bulk forms) on a sequence job; and the leader's sweep every `SchedulerInterval`, which walks the keys with pending
 jobs by a loose index scan. Promotion NOTIFYs the insert channel for each queue that got an `available` job. Halting
-jobs are exempt from the cleaner. `RetryAsync` returns a finished or pending sequence job to `pending`.
+jobs are exempt from the cleaner. `RetryAsync` and `RetryManyAsync` return a finished or pending sequence job to
+`pending`.
 
 ## Inserting
 
@@ -331,7 +356,7 @@ jobs are exempt from the cleaner. `RetryAsync` returns a finished or pending seq
    (`MaxAttempts` 25, `Priority` 1, `Queue` "default"). Validate priority (1..4), queue name, and tags (≤ 255 chars,
    River's regex).
 2. A sequence key means state `pending`; otherwise `ScheduledAt` in the future means `scheduled`, else `available`.
-3. Unique options: build the key and bitmask. The default states are available, completed, pending, retryable, running
+3. Unique options: build the key and bitmask. Then, for an encrypted kind, encrypt the args into the envelope. The default states are available, completed, pending, retryable, running
    and scheduled. A custom set must include available, pending, running and scheduled, and `ByPeriod` must be at least 1 s.
 4. The insert middleware pipeline runs over the batch.
 5. Execute: `INSERT … ON CONFLICT (unique_key) WHERE … DO UPDATE SET kind = {p}job.kind RETURNING *, (xmax <> 0)`. A

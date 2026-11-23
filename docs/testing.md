@@ -18,7 +18,8 @@ await assert.NotInsertedAsync<ChargeCard>(connection, transaction);
 await transaction.RollbackAsync(); // nothing persists
 ```
 
-Failures throw `OxbowAssertionException`, so it works with any test framework.
+Failures throw `OxbowAssertionException`, so it works with any test framework. For kinds with
+[encrypted args](encryption.md#testing), set `ArgsProtector`.
 
 ## Run a worker without a database
 
@@ -27,10 +28,12 @@ var harness = new WorkerHarness<SendWelcomeEmail, SendWelcomeEmailWorker>(servic
 var result = await harness.WorkAsync(new SendWelcomeEmail("ada@example.com"));
 
 Assert.Equal(WorkOutcome.Completed, result.Outcome);
+Assert.Equal("sent", result.Output?.GetProperty("status").GetString());  // what job.SetOutput recorded
 ```
 
 The harness opens a DI scope, runs your registered work middleware, applies the worker's timeout, and reports what
-Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`.
+Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`. `result.Progress` is the progress the
+worker last reported; heartbeats do nothing.
 
 For full integration tests, run Postgres in a container (Testcontainers), apply `OxbowSchema.GetMigrations(0)`, and use a
 unique `TablePrefix` per test to isolate them, as Oxbow's own suite does.

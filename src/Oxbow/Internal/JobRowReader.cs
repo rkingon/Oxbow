@@ -25,6 +25,7 @@ internal static class JobRowReader
             Metadata = ParseJson(reader.GetString(13)),
             Queue = reader.GetString(14),
             Tags = reader.GetFieldValue<string[]>(15),
+            SequenceKey = reader.IsDBNull(16) ? null : reader.GetString(16),
         };
     }
 

@@ -48,6 +48,7 @@ public sealed class TestApp : IAsyncDisposable
             o.RescuerInterval = TimeSpan.FromMilliseconds(300);
             o.CleanerInterval = TimeSpan.FromMilliseconds(300);
             o.ElectInterval = TimeSpan.FromMilliseconds(500);
+            o.BatchFinisherInterval = TimeSpan.FromMilliseconds(200);
             configure?.Invoke(o);
         });
         register?.Invoke(oxbow);

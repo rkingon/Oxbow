@@ -29,6 +29,29 @@ public sealed class SequenceKeyTests
     [Fact]
     public void Args_without_marked_properties_have_no_sequence() => Assert.Null(Key(new Plain("a")));
 
+    [Fact]
+    public void An_encrypted_kind_stores_a_keyed_hash_instead_of_the_marked_values()
+    {
+        var args = new Deliver("ep_secret", 7, "ignored");
+        var key = SequenceKeys.Resolve(
+            null, "deliver", JsonSerializer.Serialize(args, Json), Json.GetTypeInfo(typeof(Deliver)), new ReversingProtector());
+
+        Assert.StartsWith("deliver:hmac:", key, StringComparison.Ordinal);
+        Assert.DoesNotContain("ep_secret", key, StringComparison.Ordinal);
+        Assert.Equal(key, SequenceKeys.Resolve(
+            null, "deliver", JsonSerializer.Serialize(args, Json), Json.GetTypeInfo(typeof(Deliver)), new ReversingProtector()));
+    }
+
+    private sealed class ReversingProtector : IJobArgsProtector
+    {
+        public string Protect(string kind, string args) => args;
+
+        public string Unprotect(string kind, string payload) => payload;
+
+        public byte[] HashUniqueKey(ReadOnlySpan<byte> uniqueKey) =>
+            System.Security.Cryptography.HMACSHA256.HashData("test-key"u8, uniqueKey);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(256)]

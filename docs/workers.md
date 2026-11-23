@@ -37,6 +37,36 @@ services.AddOxbow(...).AddWorker<ResizeImage, ResizeImageWorker>();
 | throws `JobSnoozeException(delay)` | `scheduled` for `now + delay`; the attempt isn't spent; `metadata.snoozes` is incremented |
 | throws `JobCancelException` | `cancelled`, with the error recorded; never retried |
 
+## Output
+
+A worker can record a result. It's stored in `metadata.output` when the job completes, in the same write as the
+completion, and read back from any `JobRow` (`GetAsync`, `ListAsync`):
+
+```csharp
+public async Task WorkAsync(Job<ResizeImage> job, CancellationToken cancellationToken)
+{
+    var url = await images.SaveAsync(/* … */);
+    job.SetOutput(new ResizeResult(url));
+}
+
+var job = await oxbow.GetAsync(id);
+var result = job?.GetOutput<ResizeResult>(jsonOptions);  // or job.Output, the raw JsonElement
+```
+
+- Serialized as its runtime type with `OxbowOptions.JsonSerializerOptions`; with a `JsonSerializerContext`, register
+  the output type there too. Pass the same options to `GetOutput<T>` (the default is `JsonSerializerOptions.Web`,
+  which matches Oxbow's default).
+- Only recorded on completion. If the attempt fails, snoozes or is cancelled, the output is dropped, as in River.
+  `SetOutput` again replaces it.
+- At most `JobRow.MaxOutputSize` (1 MiB) of JSON. A larger output fails the attempt with an `InvalidOperationException`
+  in `errors`, and one that can't be serialized fails it with the serializer's exception; either way the job is retried
+  like any other failure. Store large results elsewhere and record a reference: the output lives in the job row, and
+  `metadata` has a GIN index.
+- A retried job (`RetryAsync`) keeps its previous output until it completes again.
+- As in River, the output is merged into the row even if the job is no longer running by the time the completion is
+  written (the rescuer took it after its timeout and it was retried, discarded or cancelled). The state isn't changed,
+  but the late output replaces any output already there.
+
 ## Timeouts
 
 The default is `OxbowOptions.JobTimeout` (1 minute). Override it per worker:
@@ -46,6 +76,39 @@ public TimeSpan? GetTimeout(Job<ResizeImage> job) => TimeSpan.FromMinutes(5);  /
 ```
 
 A timeout cancels the job's `CancellationToken`; the attempt is recorded as a `TimeoutException` and retried.
+
+## Heartbeat and progress
+
+```csharp
+public async Task WorkAsync(Job<ImportCsv> job, CancellationToken cancellationToken)
+{
+    for (var i = 0; i < batches.Count; i++)
+    {
+        await ImportAsync(batches[i], cancellationToken);
+        await job.ReportProgressAsync(100.0 * (i + 1) / batches.Count, $"batch {i + 1} of {batches.Count}", cancellationToken);
+    }
+}
+```
+
+- `job.HeartbeatAsync()` records that the attempt is alive, as `oxbow:heartbeat_at` in metadata. It's throttled:
+  calls within a tenth of `RescueStuckJobsAfter` (30 s at most) of the last write do nothing, so call it as often as
+  is convenient.
+- `job.ReportProgressAsync(percent, message)` writes `oxbow:progress` (`percent` 0–100, `message` of at most 1,000
+  characters, `attempt`, `at`) and counts as a heartbeat; out-of-range values throw. It isn't throttled; every call is a write to the job's row, so report at a sensible
+  cadence.
+- Read them with `GetAsync` or `ListAsync`: `JobRow.Progress` and `JobRow.HeartbeatAt`. `job.Progress` is what this
+  attempt last reported.
+- Neither is reset when a new attempt starts, and both stay after the job finishes. They belong to the current execution
+  when `Progress.At` and `HeartbeatAt` are at or after `AttemptedAt`. The attempt number alone isn't enough: a snooze
+  or a shutdown hands the same number to the next execution.
+- Writes only land while this attempt is the one running. After the job finishes, or is rescued and picked up again,
+  they do nothing.
+- **An attempt that heartbeats is judged by its heartbeat.** The [rescuer](maintenance.md) leaves it alone, however
+  long it runs, until `RescueStuckJobsAfter` (1 h) passes without one. Then it's rescued even if it has no timeout or
+  its timeout hasn't elapsed, so a job that heartbeats must keep doing so: no single step may run longer than
+  `RescueStuckJobsAfter` without a heartbeat.
+- Outside Oxbow's executor (a `Job<TArgs>` created in a unit test, or `WorkerHarness`) heartbeats do nothing and
+  progress only updates `job.Progress`; `WorkResult.Progress` reports it.
 
 ## The cancellation token
 

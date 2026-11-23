@@ -7,11 +7,47 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Args encryption at rest: mark a kind `[EncryptArgs]` or set `OxbowOptions.EncryptAllArgs`, and register a protector.
+  The new `Oxbow.DataProtection` package's `AddArgsEncryption()` implements `IJobArgsProtector` on ASP.NET Core Data
+  Protection. Encrypted args are stored as the JSON string `"oxbow:enc:v1:…"`; unique-by-args keys of encrypted kinds
+  are an HMAC. `IJobArgsProtector.UnprotectArgs(row)` reads stored args, and `OxbowAssert.ArgsProtector` decrypts in
+  assertions.
+  See [docs/encryption.md](docs/encryption.md).
+- Heartbeat and progress: `Job<TArgs>.HeartbeatAsync` and `ReportProgressAsync`, stored as `oxbow:heartbeat_at` and
+  `oxbow:progress` in metadata and read through `JobRow.HeartbeatAt` and `JobRow.Progress`. The rescuer uses the later
+  of `attempted_at` and the heartbeat, so a healthy long job isn't rescued, and an attempt that heartbeats is rescued
+  once its heartbeats stop, even with no timeout. `WorkResult.Progress` in `Oxbow.Testing`.
+- Batches: `IOxbowClient.InsertBatchAsync` inserts a group of jobs and its batch row in one statement (on your
+  transaction, its own, or a `DbContext`'s), with `OnComplete` and `OnSuccess` callback jobs that the leader enqueues
+  exactly once when the group finishes. `GetBatchAsync` reports progress, `JobRow.BatchId` and
+  `JobFilter.BatchId` link jobs to their batch, and `OxbowOptions.BatchRetention` (24 hours) sets how long a finished
+  batch is kept. The job cleaner keeps a batch's members while the batch exists.
+- `CancelManyAsync`, `RetryManyAsync` and `DeleteManyAsync` on `IOxbowClient`: the single-job semantics applied to every
+  job matching a `JobFilter`, in batches. Bulk retry skips jobs whose unique key another live job holds and reports
+  them in `RetryManyResult`. Bulk cancel stops running jobs on every node with batched control NOTIFYs; nodes on
+  0.1.0-alpha.3 pick those up at their cancel poll instead.
+- `JobFilter`, now the base of `JobListQuery`, with `BatchId`, `Metadata` (JSON containment) and `Tags` (all of)
+  filters for `ListAsync` and the bulk operations.
+- Job output: `job.SetOutput(value)` records a result in `metadata.output` with the completion, read back with
+  `JobRow.Output` and `JobRow.GetOutput<T>()`; capped at `JobRow.MaxOutputSize` (1 MiB). `WorkResult.Output` in
+  `Oxbow.Testing`.
+- Discard handlers: `AddDiscardHandler<T>()` registers an `IJobDiscardHandler`, called best-effort after a job is
+  discarded or cancelled by its worker, a cancel request, the rescuer or the scheduler's unique-key check.
+- Durable periodic jobs. Run times of every periodic job are persisted in `{prefix}periodic_job` (schema version 2), so
+  a leader failover or restart neither skips nor repeats a run, and missed runs catch up once. Periodic jobs can be
+  stored and managed at runtime: `IOxbowClient.CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`,
+  `PausePeriodicJobAsync`, `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and
+  `ListPeriodicJobsAsync` (paged).
+  `AddPeriodicJob(name, …)` names a code-registered job; unnamed ones get a name derived from kind and schedule.
 - Sequences: `InsertOptions.SequenceKey` or `[SequenceKey]` on args runs jobs with the same key one at a time, in
   insert order. A job that ran and ended discarded or cancelled halts its sequence until it's retried or deleted, unless
-  `InsertOptions.SequenceContinueOn` says to move past it. Needs schema version 2 and this release on the leader.
+  `InsertOptions.SequenceContinueOn` says to move past it. `JobRow.SequenceKey` and `JobFilter.SequenceKey` read and
+  target a sequence. Needs schema version 2 and this release on the leader.
 
 ### Changed
+
+- `runOnStart` on periodic jobs enqueues the first run only, when the job has no persisted state yet. It no longer runs
+  on every start or change of leader. Periodic runs carry `oxbow:periodic_job` in their metadata.
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and
   grant `GetGrants(role, version: 2)` before deploying. The previous release keeps working against version 2.
@@ -20,6 +56,8 @@ All notable changes to this project are documented here. The format follows
 - **Breaking (EF):** `AddOxbowSchema`, `RemoveOxbowSchema` and `GrantOxbowAccess` take a required `version`. A default
   of the latest version made existing migrations replay different SQL after a package upgrade. Pass `version: 1` in
   your existing Oxbow migration.
+- `JobListQuery` derives from `JobFilter`, which now declares `States`, `Queues` and `Kinds`. Source compatible;
+  recompile code built against an earlier release.
 
 ## [0.1.0-alpha.3] - 2026-11-23
 

@@ -10,14 +10,35 @@ The leader runs:
 | Service | Every | Does |
 |---|---|---|
 | Scheduler | `SchedulerInterval` (5 s) | Makes due `scheduled` and `retryable` jobs `available`, and wakes their queues |
-| Rescuer | 30 s | Jobs `running` longer than `RescueStuckJobsAfter` (1 h) and past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
-| Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them) |
+| Rescuer | 30 s | Jobs `running` with no sign of life (start or heartbeat) for `RescueStuckJobsAfter` (1 h) and, unless they heartbeated, past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
+| Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them), except members of a batch that still exists |
 | Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
-| Periodic enqueuer | on schedule | Enqueues periodic jobs |
+| Batch finisher | 1 s | Enqueues the callbacks of batches whose jobs have all finished, and marks them finished, in one statement ([batches](batches.md)) |
+| Batch cleaner | 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callbacks have finished |
+| Periodic enqueuer | on schedule, re-reading every `SchedulerInterval` | Enqueues due periodic jobs from `{prefix}periodic_job` ([periodic jobs](scheduled-and-periodic-jobs.md#periodic)) |
 | Queue depth | 10 s | Publishes `oxbow.queue.depth` |
 | Sequencer | `SchedulerInterval` (5 s), and on insert NOTIFYs | Promotes the next job of each [sequence](sequences.md) with nothing running |
 
-A job with no timeout (`Timeout.InfiniteTimeSpan`) is never rescued, since it may legitimately still be running.
+## The rescuer
+
+A job is a candidate once the later of its `attempted_at` and its last [heartbeat](workers.md#heartbeat-and-progress)
+is older than `RescueStuckJobsAfter`. Then:
+
+- If a cancel was requested, it's cancelled.
+- If the attempt has heartbeated, it's rescued, regardless of its timeout (even `Timeout.InfiniteTimeSpan`): it
+  promised heartbeats and stopped sending them for `RescueStuckJobsAfter`.
+- Otherwise, if the leader has a worker for the kind, it's left alone while it may legitimately still be running: with
+  no timeout (`Timeout.InfiniteTimeSpan`), or within its timeout counted from `attempted_at`.
+- Anything else is retried with backoff, or discarded when out of attempts.
+
+So a long job that heartbeats is never rescued while it's healthy, even when the leader can't know its timeout, and a
+job with no timeout that dies after heartbeating is recovered instead of staying `running` forever. A job that never
+heartbeats is judged as before.
+
+In a fleet mixing versions, a leader on a release before heartbeats ignores them and judges every job by
+`attempted_at` and its timeout.
+
+A heartbeat that isn't a valid timestamp (`oxbow:` metadata keys are Oxbow's; don't write them at insert) is ignored.
 
 The rescuer retries a job whose kind the leader has no worker for, rather than discarding it as River does: the leader
 may simply not run that job's queue.
