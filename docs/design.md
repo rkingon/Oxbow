@@ -285,9 +285,9 @@ producer needs no locks:
   separate statement so the count's snapshot postdates the lock. See [concurrency limits](concurrency-limits.md);
 - a queue with a `RateLimit` or `PartitionRateLimit` takes the same path, always behind the queue lock. The fetch caps
   its `LIMIT` and each key's room by what the GCRA limiters (`{p}queue.rate_limit_tat`, `{p}rate_limit` per key) allow
-  at `now()`, and advances them by the jobs it started; a third statement returns how long until the next start is
-  due, and the producer wakes then, skipping the fetch cooldown and fetching nothing before it. See
-  [rate limiting](rate-limiting.md).
+  at the statement's time (taken after the lock, unlike `now()`), and advances them by the jobs it started; a third
+  statement returns how long until the next start is due, and the producer wakes then, skipping the fetch cooldown and
+  fetching nothing before it. See [rate limiting](rate-limiting.md).
 
 **Executor.** It creates a scope, resolves `IWorker<TArgs>`, deserializes the args, builds the middleware pipeline, runs
 the worker, maps the outcome to a state update and hands it to the completer. Exceptions are caught, so a worker can

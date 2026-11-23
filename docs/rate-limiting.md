@@ -61,7 +61,9 @@ are rows of `{prefix}rate_limit`. There's no refill job.
   by `Burst` and the free workers), fetches at most that many, and advances each limiter by the jobs it actually
   started, all in one transaction. Fetches for the queue are serialized, so two nodes can't both spend the same
   allowance.
-- The clock is the database's `now()`, never the node's.
+- The clock is the database's, never the node's: the time the fetch statement runs, after it has the lock, which is
+  also what's written to `attempted_at`. (Not `now()`, the transaction's start: a fetch that waited for the lock would
+  judge itself by a time before the starts it waited behind.)
 - A start is a job moving to `running`. Retries and snoozed jobs coming back count again; a job that fails or is
   cancelled has still spent its start. The limit is on starts, not on how many run at once or how long they take:
   combine it with a `ConcurrencyLimit` for that.
@@ -69,8 +71,9 @@ are rows of `{prefix}rate_limit`. There's no refill job.
   then, rather than at the next poll, so rates above one per `FetchPollInterval` or `FetchCooldown` work. Until then
   it doesn't fetch the queue at all: inserts and finished jobs don't make it poll the database for nothing. A throttled
   key likewise schedules a wake-up for when it's next due, subject to `FetchCooldown`.
-- The leader deletes per-key rows once they've caught up (a caught-up limiter and no row behave the same), every
-  cleaner interval, so the table holds only recently active keys.
+- The leader deletes per-key rows a minute after they've caught up (a caught-up limiter and no row behave the same),
+  every cleaner interval, so the table holds only recently active keys. The queue cleaner keeps a queue's row while its
+  limiter is ahead, however long its nodes are gone.
 - Queues without a rate limit keep their fetch as it was.
 
 ## Throughput
@@ -99,4 +102,5 @@ Limits are configured in code on each node, and the limiter's state is just a ti
 - Nodes on 0.1.0-alpha.3 (schema version 1 code), and nodes that don't configure the limit, fetch the queue without it
   and don't advance its limiter, so during a rolling upgrade the rate can be exceeded. Limits hold once every node
   working the queue runs a release that supports them with the same configuration. A leader on 0.1.0-alpha.3 doesn't
-  delete caught-up per-key rows; they wait for a newer leader.
+  delete caught-up per-key rows (they wait for a newer leader), and its queue cleaner can delete a queue row unused
+  for 24 hours whose limiter is still ahead, which matters only for limits slower than one start a day.

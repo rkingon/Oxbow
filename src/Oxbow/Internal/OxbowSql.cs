@@ -106,11 +106,13 @@ internal sealed class OxbowSql
         // the others; the window then keeps at most `room` jobs per key, and the queue's rate limit caps the total.
         //
         // Rate limits are GCRA, run under the queue lock: with emission interval T and burst b, a limiter whose
-        // theoretical arrival time is tat allows b - ceil((tat - now()) / T) starts (tat no earlier than now()), and
-        // each start pushes tat T later. Only starts actually made advance it.
+        // theoretical arrival time is tat allows b - ceil((tat - t) / T) starts (tat no earlier than t), and each start
+        // pushes tat T later. Only starts actually made advance it. t is statement_timestamp(), which this statement
+        // takes after QueueLock returns; now() is the transaction's start, before the wait for the lock, so a fetch
+        // that waited would judge itself by a time earlier than the previous holder's starts.
         GetAvailableLimited = $"""
             WITH queue_rate AS (
-                SELECT greatest(q.rate_limit_tat, now()) AS tat0
+                SELECT greatest(q.rate_limit_tat, statement_timestamp()) AS tat0
                 FROM {queue} AS q
                 WHERE @rate_interval::bigint IS NOT NULL
                   AND q.name = @queue
@@ -118,7 +120,7 @@ internal sealed class OxbowSql
             allowed AS (
                 SELECT least(@max::int, (
                     SELECT greatest(0, @rate_burst::int
-                        - ceil(extract(epoch FROM tat0 - now()) * 1000000 / @rate_interval::bigint)::bigint)
+                        - ceil(extract(epoch FROM tat0 - statement_timestamp()) * 1000000 / @rate_interval::bigint)::bigint)
                     FROM queue_rate)) AS n
             ),
             running AS (
@@ -137,11 +139,11 @@ internal sealed class OxbowSql
             key_rate AS (
                 SELECT partition_key, tat AS tat0,
                     greatest(0, @key_rate_burst::int
-                        - ceil(extract(epoch FROM tat - now()) * 1000000 / @key_rate_interval::bigint)::bigint)::int AS allowance
+                        - ceil(extract(epoch FROM tat - statement_timestamp()) * 1000000 / @key_rate_interval::bigint)::bigint)::int AS allowance
                 FROM {rateLimit}
                 WHERE @key_rate_interval::bigint IS NOT NULL
                   AND queue = @queue
-                  AND tat > now()
+                  AND tat > statement_timestamp()
             ),
             room AS (
                 SELECT partition_key,
@@ -191,7 +193,7 @@ internal sealed class OxbowSql
                 UPDATE {job} AS j
                 SET state = 'running',
                     attempt = j.attempt + 1,
-                    attempted_at = now(),
+                    attempted_at = statement_timestamp(),
                     attempted_by = array_append(
                         CASE WHEN array_length(j.attempted_by, 1) >= 100
                             THEN j.attempted_by[array_length(j.attempted_by, 1) - 98:]
@@ -212,7 +214,7 @@ internal sealed class OxbowSql
             key_advance AS (
                 INSERT INTO {rateLimit} (queue, partition_key, tat)
                 SELECT @queue::text, f.partition_key,
-                    coalesce(k.tat0, now()) + interval '1 microsecond' * (count(*) * @key_rate_interval::bigint)
+                    coalesce(k.tat0, statement_timestamp()) + interval '1 microsecond' * (count(*) * @key_rate_interval::bigint)
                 FROM fetched AS f
                 LEFT JOIN key_rate AS k USING (partition_key)
                 WHERE @key_rate_interval::bigint IS NOT NULL
@@ -224,29 +226,33 @@ internal sealed class OxbowSql
             """;
 
         // Run after GetAvailableLimited in its transaction: seconds until the queue's limiter next allows a start, and
-        // until the first throttled key's does; NULL or negative when there's nothing to wait for. Relative to now() so
-        // the producer's clock never meets the database's.
+        // until the first throttled key's does; NULL or negative when there's nothing to wait for. Relative to the
+        // database's clock, so the producer's never meets it.
         RateLimitWait = $"""
             SELECT
-                (SELECT extract(epoch FROM rate_limit_tat - now())::float8
+                (SELECT extract(epoch FROM rate_limit_tat - statement_timestamp())::float8
                         - (@rate_burst::int - 1) * @rate_interval::bigint / 1e6::float8
                  FROM {queue}
                  WHERE @rate_interval::bigint IS NOT NULL
                    AND name = @queue),
-                (SELECT extract(epoch FROM min(tat) - now())::float8
+                (SELECT extract(epoch FROM min(tat) - statement_timestamp())::float8
                         - (@key_rate_burst::int - 1) * @key_rate_interval::bigint / 1e6::float8
                  FROM {rateLimit}
                  WHERE @key_rate_interval::bigint IS NOT NULL
                    AND queue = @queue
-                   AND tat > now() + interval '1 microsecond' * ((@key_rate_burst::int - 1) * @key_rate_interval::bigint))
+                   AND tat > statement_timestamp() + interval '1 microsecond' * ((@key_rate_burst::int - 1) * @key_rate_interval::bigint))
             """;
 
-        // A row whose tat has passed allows a full burst, exactly as no row does.
+        // A row whose tat has passed allows a full burst, exactly as no row does; the minute's margin keeps that true for
+        // a fetch whose clock reads earlier than this transaction's. SKIP LOCKED leaves rows a fetch is upserting alone,
+        // so the two can't deadlock.
         RateLimitDeleteExpired = $"""
             DELETE FROM {rateLimit}
-            WHERE (queue, partition_key) IN (SELECT queue, partition_key FROM {rateLimit} WHERE tat < now() LIMIT @max)
-              -- Rechecked against a row a fetch advanced meanwhile.
-              AND tat < now()
+            WHERE (queue, partition_key) IN (
+                SELECT queue, partition_key FROM {rateLimit}
+                WHERE tat < now() - interval '1 minute'
+                LIMIT @max
+                FOR UPDATE SKIP LOCKED)
             """;
 
         IsRunningAttempt = $"SELECT EXISTS (SELECT 1 FROM {job} WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at)";
@@ -734,7 +740,12 @@ internal sealed class OxbowSql
             SELECT pg_notify(@channel, json_build_object('action', 'resume', 'queue', @name)::text)
             """;
 
-        QueueDeleteExpired = $"DELETE FROM {queue} WHERE updated_at < @horizon";
+        // A queue whose rate limiter is still ahead of now() keeps its row, or a restart would get a fresh allowance.
+        QueueDeleteExpired = $"""
+            DELETE FROM {queue}
+            WHERE updated_at < @horizon
+              AND (rate_limit_tat IS NULL OR rate_limit_tat < now())
+            """;
 
         // A loose index scan: one probe of the pending index per sequence, however long its backlog.
         SequencePendingKeys = $"""

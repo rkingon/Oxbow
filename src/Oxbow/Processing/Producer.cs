@@ -22,6 +22,9 @@ internal sealed class Producer(
     // How many candidates a limited fetch scans per free slot; the extra covers keys that only have room for some.
     private const int LimitedScanFactor = 4;
 
+    // Timers and delays top out near 49 days; a longer rate limit wait just fetches again, finds nothing, and re-arms.
+    private static readonly TimeSpan MaxRateWait = TimeSpan.FromHours(1);
+
     private readonly Channel<bool> _wake = Channel.CreateBounded<bool>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
 
@@ -180,16 +183,20 @@ internal sealed class Producer(
             return;
         }
 
-        // The waits are measured from the fetch's now(), which predates this, so the wake is never early.
+        // The waits are measured from the database's clock while the fetch ran, which predates this, so the wake is
+        // never early.
         if (fetch.RateWait > TimeSpan.Zero)
         {
-            _throttledUntil = timeProvider.GetUtcNow() + fetch.RateWait.Value;
-            timer.Change(fetch.RateWait.Value, Timeout.InfiniteTimeSpan);
+            var wait = Min(fetch.RateWait.Value, MaxRateWait);
+            _throttledUntil = timeProvider.GetUtcNow() + wait;
+            timer.Change(wait, Timeout.InfiniteTimeSpan);
         }
         else if (fetch.PartitionRateWait > TimeSpan.Zero)
         {
-            timer.Change(fetch.PartitionRateWait.Value, Timeout.InfiniteTimeSpan);
+            timer.Change(Min(fetch.PartitionRateWait.Value, MaxRateWait), Timeout.InfiniteTimeSpan);
         }
+
+        static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
     }
 
     private TimeSpan SettingsPollInterval => runtime.Options.PollOnly ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(30);

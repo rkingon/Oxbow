@@ -16,5 +16,6 @@ public sealed record RateLimit(int Limit, TimeSpan Period)
     public int Burst { get; init; } = 1;
 
     /// <summary>The time between starts in microseconds, rounded up so the limit is never exceeded.</summary>
-    internal long EmissionIntervalMicroseconds => (Period.Ticks + (Limit * 10L) - 1) / (Limit * 10L);
+    internal long EmissionIntervalMicroseconds =>
+        (Period.Ticks / (Limit * 10L)) + (Period.Ticks % (Limit * 10L) == 0 ? 0 : 1);
 }

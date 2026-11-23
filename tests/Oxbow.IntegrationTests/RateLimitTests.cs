@@ -267,12 +267,87 @@ public sealed class RateLimitTests(PostgresFixture database)
 
         await app.Client.InsertManyAsync(new[] { "a", "b", "c" }.Select(key => new InsertManyItem(new LimitedArgs(key))));
         await WaitCompletedAsync(prefix, 3);
+        Assert.Equal(3L, await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM {prefix}rate_limit"));
+
+        // Rows are kept a minute past catching up; age two of them past that.
+        await database.ExecuteAsOwnerAsync(
+            $"UPDATE {prefix}rate_limit SET tat = now() - interval '2 minutes' WHERE partition_key <> '{{\"customer\":\"c\"}}'");
+        await database.ExecuteAsOwnerAsync(
+            $"UPDATE {prefix}rate_limit SET tat = now() + interval '1 hour' WHERE partition_key = '{{\"customer\":\"c\"}}'");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM {prefix}rate_limit") > 0)
+        while (await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM {prefix}rate_limit") > 1)
         {
             await Task.Delay(100, cts.Token);
         }
+
+        Assert.Equal("""{"customer":"c"}""", await database.ScalarAsOwnerAsync<string>($"SELECT partition_key FROM {prefix}rate_limit"));
+    }
+
+    [Fact]
+    public async Task A_fetch_that_waited_for_the_queue_lock_judges_by_when_it_got_it()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var sql = new OxbowSql("public", prefix);
+        var limits = new FetchLimits(null, new RateLimit(1, TimeSpan.FromSeconds(1)));
+        await app.Client.InsertManyAsync(Enumerable.Range(0, 2).Select(i => new InsertManyItem(new RecordArgs($"{i}"))));
+
+        await using var holder = await app.DataSource.OpenConnectionAsync();
+        await using var holding = await holder.BeginTransactionAsync();
+        await using (var queueLock = new NpgsqlCommand(sql.QueueLock, holder, holding))
+        {
+            queueLock.Parameters.AddWithValue("queue", "default");
+            await queueLock.ExecuteNonQueryAsync();
+        }
+
+        // Both fetches begin before the lock is free, the second more than an interval after the first: by their
+        // transactions' start times both would be allowed, though they'd start together.
+        var first = FetchAsync(app, sql, limits);
+        await Task.Delay(TimeSpan.FromSeconds(1.2));
+        var second = FetchAsync(app, sql, limits);
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        Assert.False(first.IsCompleted || second.IsCompleted);
+        await holding.CommitAsync();
+
+        Assert.Equal(1, (await first).Jobs.Count + (await second).Jobs.Count);
+    }
+
+    [Fact]
+    public async Task A_wait_longer_than_a_timer_allows_still_starts_what_was_fetched()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix, o =>
+            o.Queues["default"] = new QueueOptions { RateLimit = new(1, TimeSpan.FromDays(60)) });
+
+        var jobs = await app.Client.InsertManyAsync(Enumerable.Range(0, 2).Select(i => new InsertManyItem(new RecordArgs($"{i}"))));
+        await app.WaitForStateAsync(jobs[0].Job.Id, JobState.Completed);
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        var waiting = (await app.Client.GetAsync(jobs[1].Job.Id))!;
+        Assert.Equal((JobState.Available, 0), (waiting.State, waiting.Attempt));
+    }
+
+    [Fact]
+    public async Task The_queue_cleaner_keeps_a_queue_whose_limiter_is_ahead()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        await database.ExecuteAsOwnerAsync($"""
+            INSERT INTO {prefix}queue (name, updated_at, rate_limit_tat) VALUES
+                ('ahead', now() - interval '2 days', now() + interval '1 day'),
+                ('caught_up', now() - interval '2 days', now() - interval '1 day'),
+                ('unlimited', now() - interval '2 days', NULL)
+            """);
+
+        await using (var clean = app.DataSource.CreateCommand(new OxbowSql("public", prefix).QueueDeleteExpired))
+        {
+            clean.Parameters.AddWithValue("horizon", DateTimeOffset.UtcNow.AddDays(-1));
+            await clean.ExecuteNonQueryAsync();
+        }
+
+        Assert.Equal("ahead", await database.ScalarAsOwnerAsync<string>(
+            $"SELECT string_agg(name, ',') FROM {prefix}queue WHERE name IN ('ahead', 'caught_up', 'unlimited')"));
     }
 
     private static async Task<LimitedFetch> FetchAsync(TestApp app, OxbowSql sql, FetchLimits limits)
