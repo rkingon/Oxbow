@@ -15,6 +15,7 @@ The leader runs:
 | Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
 | Periodic enqueuer | on schedule | Enqueues periodic jobs |
 | Queue depth | 10 s | Publishes `oxbow.queue.depth` |
+| Sequencer | `SchedulerInterval` (5 s), and on insert NOTIFYs | Promotes the next job of each [sequence](sequences.md) with nothing running |
 
 A job with no timeout (`Timeout.InfiniteTimeSpan`) is never rescued, since it may legitimately still be running.
 

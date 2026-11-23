@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Sequences: `InsertOptions.SequenceKey` or `[SequenceKey]` on args runs jobs with the same key one at a time, in
+  insert order. A job that ran and ended discarded or cancelled halts its sequence until it's retried or deleted, unless
+  `InsertOptions.SequenceContinueOn` says to move past it. Needs schema version 2 and this release on the leader.
+
 ### Changed
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and

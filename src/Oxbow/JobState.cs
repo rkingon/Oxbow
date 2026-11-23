@@ -15,7 +15,7 @@ public enum JobState
     /// <summary>Failed its last attempt or was discarded; terminal.</summary>
     Discarded,
 
-    /// <summary>Inserted but not yet eligible to be scheduled. Reserved for future use.</summary>
+    /// <summary>Waiting for its turn in a sequence.</summary>
     Pending,
 
     /// <summary>Failed an attempt and waiting for its retry time.</summary>

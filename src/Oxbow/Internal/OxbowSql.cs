@@ -18,11 +18,13 @@ internal sealed class OxbowSql
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
         LeadershipChannel = $"{schema}.{prefix}leadership";
+        SequenceChannel = $"{schema}.{prefix}sequence";
 
         SchemaVersion = $"SELECT coalesce(max(version), 0) FROM {schema}.{prefix}migration";
 
         InsertMany = $"""
-            INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states)
+            INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
+                sequence_key, sequence_continue_on)
             SELECT
                 i.args::jsonb,
                 i.kind,
@@ -34,12 +36,15 @@ internal sealed class OxbowSql
                 i.state::{state},
                 coalesce(string_to_array(nullif(i.tags, ''), ','), '{"{}"}')::varchar(255)[],
                 i.unique_key,
-                nullif(i.unique_states, 0)::bit(8)
+                nullif(i.unique_states, 0)::bit(8),
+                i.sequence_key,
+                i.sequence_continue_on
             FROM unnest(
                 @args::text[], @kind::text[], @max_attempts::smallint[], @metadata::text[], @priority::smallint[],
                 @queue::text[], @scheduled_at::timestamptz[], @state::text[], @tags::text[], @unique_key::bytea[],
-                @unique_states::int[]
-            ) AS i(args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states)
+                @unique_states::int[], @sequence_key::text[], @sequence_continue_on::smallint[]
+            ) AS i(args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
+                sequence_key, sequence_continue_on)
             ON CONFLICT (unique_key)
                 WHERE unique_key IS NOT NULL
                   AND unique_states IS NOT NULL
@@ -49,7 +54,7 @@ internal sealed class OxbowSql
             RETURNING {Columns(prefix + "job")}, (xmax <> 0) AS unique_skipped_as_duplicate
             """;
 
-        CopyJobs = $"COPY {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags) FROM STDIN (FORMAT BINARY)";
+        CopyJobs = $"COPY {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, sequence_key, sequence_continue_on) FROM STDIN (FORMAT BINARY)";
         StateTypeName = state;
 
         Notify = "SELECT pg_notify(@channel, payload) FROM unnest(@payloads::text[]) AS payload";
@@ -142,9 +147,9 @@ internal sealed class OxbowSql
                 FROM input
                 WHERE j.id = input.id
                   AND (j.state = 'running' OR input.metadata_do_merge)
-                RETURNING j.id, j.state::text AS state, j.queue, j.kind
+                RETURNING j.id, j.state::text AS state, j.queue, j.kind, j.sequence_key
             )
-            SELECT id, state, queue, kind FROM updated
+            SELECT id, state, queue, kind, sequence_key FROM updated
             """;
 
         Cancel = $"""
@@ -184,7 +189,12 @@ internal sealed class OxbowSql
             updated AS (
                 UPDATE {job} AS j
                 SET
-                    state = 'available',
+                    -- A sequence job rejoins the line; only promotion makes a sequence job live.
+                    state = CASE
+                        WHEN j.sequence_key IS NOT NULL AND j.state IN ('cancelled', 'completed', 'discarded', 'pending')
+                        THEN 'pending'::{state}
+                        ELSE 'available'::{state}
+                    END,
                     max_attempts = CASE WHEN j.attempt = j.max_attempts THEN j.max_attempts + 1 ELSE j.max_attempts END,
                     finalized_at = NULL,
                     -- A cancellation requested during an earlier attempt must not cancel the next one.
@@ -315,9 +325,11 @@ internal sealed class OxbowSql
             DELETE FROM {job}
             WHERE id IN (
                 SELECT id FROM {job}
-                WHERE (state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_horizon)
+                WHERE ((state = 'cancelled' AND @cancelled_do_delete AND finalized_at < @cancelled_horizon)
                    OR (state = 'completed' AND @completed_do_delete AND finalized_at < @completed_horizon)
-                   OR (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_horizon)
+                   OR (state = 'discarded' AND @discarded_do_delete AND finalized_at < @discarded_horizon))
+                  -- A halted sequence stays halted until its job is retried or deleted.
+                  AND NOT {Halts("")}
                 ORDER BY id
                 LIMIT @max
             )
@@ -396,6 +408,68 @@ internal sealed class OxbowSql
             """;
 
         QueueDeleteExpired = $"DELETE FROM {queue} WHERE updated_at < @horizon";
+
+        // A loose index scan: one probe of the pending index per sequence, however long its backlog.
+        SequencePendingKeys = $"""
+            WITH RECURSIVE pending AS (
+                (SELECT sequence_key FROM {job}
+                 WHERE state = 'pending' AND sequence_key IS NOT NULL AND sequence_key > @after
+                 ORDER BY sequence_key LIMIT 1)
+                UNION ALL
+                SELECT (SELECT j.sequence_key FROM {job} AS j
+                        WHERE j.state = 'pending' AND j.sequence_key IS NOT NULL AND j.sequence_key > p.sequence_key
+                        ORDER BY j.sequence_key LIMIT 1)
+                FROM pending AS p
+                WHERE p.sequence_key IS NOT NULL
+            )
+            SELECT sequence_key FROM pending WHERE sequence_key IS NOT NULL LIMIT @max
+            """;
+
+        // The oldest pending job of each sequence goes live when nothing in the sequence is live or halts it. Heads are
+        // locked in id order and skipped if another promoter holds them, so promoters don't deadlock. One working from
+        // a stale snapshot can still pick a different head; the live index admits one job per sequence and it retries.
+        // Identical notifications in one transaction are delivered once, so this wakes each queue once.
+        SequencePromote = $"""
+            WITH heads AS (
+                SELECT next.id
+                FROM unnest(@keys::text[]) AS k(sequence_key)
+                CROSS JOIN LATERAL (
+                    SELECT id FROM {job}
+                    WHERE sequence_key = k.sequence_key AND state = 'pending'
+                    ORDER BY id
+                    LIMIT 1
+                ) AS next
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {job} AS l
+                    WHERE l.sequence_key = k.sequence_key
+                      AND l.state IN ('available', 'retryable', 'running', 'scheduled')
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM {job} AS f
+                    WHERE f.sequence_key = k.sequence_key
+                      AND f.state IN ('cancelled', 'discarded')
+                      AND {Halts("f.")}
+                )
+            ),
+            locked AS (
+                SELECT j.id
+                FROM {job} AS j
+                JOIN heads ON j.id = heads.id
+                WHERE j.state = 'pending'
+                ORDER BY j.id
+                FOR UPDATE OF j SKIP LOCKED
+            )
+            UPDATE {job} AS j
+            SET state = CASE WHEN j.scheduled_at > now() THEN 'scheduled'::{state} ELSE 'available'::{state} END
+            FROM locked
+            WHERE j.id = locked.id
+            RETURNING j.queue, j.state::text,
+                CASE WHEN j.state = 'available'
+                    THEN pg_notify(@channel, json_build_object('queue', j.queue)::text)::text
+                END
+            """;
+
+        SequenceKeyOf = $"SELECT sequence_key FROM {job} WHERE id = @id";
     }
 
     public string InsertChannel { get; }
@@ -403,6 +477,8 @@ internal sealed class OxbowSql
     public string ControlChannel { get; }
 
     public string LeadershipChannel { get; }
+
+    public string SequenceChannel { get; }
 
     public string SchemaVersion { get; }
 
@@ -458,6 +534,20 @@ internal sealed class OxbowSql
     public string QueueResume { get; }
 
     public string QueueDeleteExpired { get; }
+
+    public string SequencePendingKeys { get; }
+
+    public string SequencePromote { get; }
+
+    public string SequenceKeyOf { get; }
+
+    /// <summary>
+    /// A cancelled or discarded sequence job that ran, and whose policy doesn't continue past that state, halts its
+    /// sequence. One that never started was only taken out of the line.
+    /// </summary>
+    private static string Halts(string alias) =>
+        $"({alias}sequence_key IS NOT NULL AND {alias}state IN ('cancelled', 'discarded') AND {alias}attempt > 0 " +
+        $"AND (coalesce({alias}sequence_continue_on, 0) & CASE {alias}state WHEN 'cancelled' THEN 1 ELSE 2 END) = 0)";
 
     /// <summary>The row columns, in the order <see cref="JobRowReader"/> reads them.</summary>
     private static string Columns(string alias) =>

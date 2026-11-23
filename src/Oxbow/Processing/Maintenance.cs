@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -16,7 +17,8 @@ internal sealed class Maintenance(
     IRetryPolicy retryPolicy,
     TimeProvider timeProvider,
     Action<string> onQueueAvailable,
-    ILogger logger)
+    ILogger logger,
+    ChannelReader<string>? signalledSequences = null)
 {
     private const int BatchSize = 1_000;
     private static readonly TimeSpan QueueCleanerInterval = TimeSpan.FromHours(1);
@@ -33,6 +35,8 @@ internal sealed class Maintenance(
                 EveryAsync("cleaner", runtime.Options.CleanerInterval, CleanAsync, cancellationToken),
                 EveryAsync("queue-cleaner", QueueCleanerInterval, CleanQueuesAsync, cancellationToken),
                 EveryAsync("queue-depth", DepthInterval, MeasureDepthAsync, cancellationToken, runImmediately: true),
+                EveryAsync("sequencer", runtime.Options.SchedulerInterval, PromoteSequencesAsync, cancellationToken, runImmediately: true),
+                PromoteSignalledSequencesAsync(cancellationToken),
                 new PeriodicEnqueuer(runtime, client, timeProvider, logger).RunAsync(cancellationToken)).ConfigureAwait(false);
         }
         finally
@@ -92,6 +96,92 @@ internal sealed class Maintenance(
                 .Select(q => JsonSerializer.Serialize(new InsertPayload(q), OxbowJsonContext.Default.InsertPayload))
                 .ToArray()));
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The backstop for every path that frees a sequence without promoting its successor: missed notifications, the
+    /// rescuer and scheduler, and nodes on releases without sequences.
+    /// </summary>
+    internal async Task PromoteSequencesAsync(CancellationToken cancellationToken)
+    {
+        var after = "";
+        while (true)
+        {
+            var keys = new List<string>();
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.SequencePendingKeys);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("after", after);
+                command.Parameters.AddWithValue("max", BatchSize);
+                var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                await using (reader.ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        keys.Add(reader.GetString(0));
+                    }
+                }
+            }
+
+            if (keys.Count == 0)
+            {
+                return;
+            }
+
+            await PromoteAsync(keys, cancellationToken).ConfigureAwait(false);
+            if (keys.Count < BatchSize)
+            {
+                return;
+            }
+
+            after = keys[^1];
+        }
+    }
+
+    /// <summary>Promotes sequences that inserts signalled, batching whatever arrives while a promotion runs.</summary>
+    private async Task PromoteSignalledSequencesAsync(CancellationToken cancellationToken)
+    {
+        if (signalledSequences is null)
+        {
+            return;
+        }
+
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!await signalledSequences.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                while (keys.Count < BatchSize && signalledSequences.TryRead(out var key))
+                {
+                    keys.Add(key);
+                }
+
+                await PromoteAsync(keys, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Log.MaintenanceFailed(logger, ex, "sequencer");
+            }
+
+            keys.Clear();
+        }
+    }
+
+    private async Task PromoteAsync(IReadOnlyCollection<string> keys, CancellationToken cancellationToken)
+    {
+        foreach (var queue in await SequencePromoter.PromoteAsync(runtime, keys, cancellationToken).ConfigureAwait(false))
+        {
+            onQueueAvailable(queue);
         }
     }
 

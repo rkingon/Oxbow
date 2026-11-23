@@ -6,6 +6,7 @@
 - [Retries](retries.md)
 - [Cancellation](cancellation.md)
 - [Unique jobs](unique-jobs.md)
+- [Sequences](sequences.md): strict FIFO per key
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)
 - [Queues](queues.md): concurrency, pause and resume
 - [Middleware](middleware.md)

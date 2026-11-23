@@ -10,6 +10,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Retries with exponential backoff and an errors history; snooze and self-cancel
 - Cancel a queued job, or signal a running one on any node through its `CancellationToken`
 - Unique jobs enforced by a unique index: by args, period, queue and state
+- Sequences: jobs with the same key run one at a time, in insert order
 - Scheduled and periodic (interval or cron) jobs
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching

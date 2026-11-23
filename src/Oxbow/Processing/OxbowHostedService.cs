@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -27,6 +28,10 @@ internal sealed class OxbowHostedService(
     private readonly CancellationTokenSource _notifierSource = new();
     private readonly Dictionary<string, Producer> _producers = new(StringComparer.Ordinal);
     private readonly List<Task> _loops = [];
+
+    // Bounded and lossy: a dropped signal waits for the leader's sweep.
+    private readonly Channel<string> _signalledSequences = Channel.CreateBounded<string>(
+        new BoundedChannelOptions(10_000) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
     private Task? _stopping;
     private bool _disposed;
     private Task _notifierLoop = Task.CompletedTask;
@@ -54,7 +59,8 @@ internal sealed class OxbowHostedService(
         }
 
         Elector = new Elector(runtime, _logger);
-        var maintenance = new Maintenance(runtime, workers, client, scopes, retryPolicy, timeProvider, TriggerFetch, _logger);
+        var maintenance = new Maintenance(
+            runtime, workers, client, scopes, retryPolicy, timeProvider, TriggerFetch, _logger, _signalledSequences.Reader);
 
         if (!options.PollOnly)
         {
@@ -62,6 +68,7 @@ internal sealed class OxbowHostedService(
             notifier.Subscribe(runtime.Sql.InsertChannel, OnInsertNotification);
             notifier.Subscribe(runtime.Sql.ControlChannel, OnControlNotification);
             notifier.Subscribe(runtime.Sql.LeadershipChannel, Elector.OnLeadershipNotification);
+            notifier.Subscribe(runtime.Sql.SequenceChannel, OnSequenceNotification);
             notifier.Connected += () =>
             {
                 foreach (var producer in _producers.Values)
@@ -201,6 +208,14 @@ internal sealed class OxbowHostedService(
         if (insert is not null)
         {
             TriggerFetch(insert.Queue);
+        }
+    }
+
+    private void OnSequenceNotification(string key)
+    {
+        if (Elector?.IsLeader == true)
+        {
+            _signalledSequences.Writer.TryWrite(key);
         }
     }
 

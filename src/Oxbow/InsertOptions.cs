@@ -25,4 +25,16 @@ public sealed record InsertOptions
 
     /// <summary>Uniqueness, enforced by a unique index in the database.</summary>
     public UniqueOptions? Unique { get; init; }
+
+    /// <summary>
+    /// Runs the job in a sequence: jobs with the same key run one at a time, in insert order, across every node and
+    /// queue. Overrides <see cref="SequenceKeyAttribute"/>. 1 to 255 characters.
+    /// </summary>
+    public string? SequenceKey { get; init; }
+
+    /// <summary>
+    /// Whether the sequence moves past this job if it ends cancelled or discarded. Default
+    /// <see cref="Oxbow.SequenceContinueOn.None"/>: it halts the sequence.
+    /// </summary>
+    public SequenceContinueOn? SequenceContinueOn { get; init; }
 }

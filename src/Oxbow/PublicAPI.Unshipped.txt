@@ -4,3 +4,13 @@
 const Oxbow.OxbowSchema.LatestVersion = 2 -> int
 static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
 static Oxbow.OxbowSchema.GetGrants(string! role, int version, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
+Oxbow.InsertOptions.SequenceKey.get -> string?
+Oxbow.InsertOptions.SequenceKey.init -> void
+Oxbow.InsertOptions.SequenceContinueOn.get -> Oxbow.SequenceContinueOn?
+Oxbow.InsertOptions.SequenceContinueOn.init -> void
+Oxbow.SequenceContinueOn
+Oxbow.SequenceContinueOn.None = 0 -> Oxbow.SequenceContinueOn
+Oxbow.SequenceContinueOn.Cancelled = 1 -> Oxbow.SequenceContinueOn
+Oxbow.SequenceContinueOn.Discarded = 2 -> Oxbow.SequenceContinueOn
+Oxbow.SequenceKeyAttribute
+Oxbow.SequenceKeyAttribute.SequenceKeyAttribute() -> void

@@ -164,14 +164,17 @@ internal sealed partial class OxbowClient(
                 await writer.WriteAsync(job.ScheduledAt?.UtcDateTime ?? now, NpgsqlDbType.TimestampTz, cancellationToken).ConfigureAwait(false);
 
                 // Written by type name, so the consumer's data source needs no enum mapping.
-                await writer.WriteAsync(job.Scheduled ? "scheduled" : "available", runtime.Sql.StateTypeName, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(InitialState(job), runtime.Sql.StateTypeName, cancellationToken).ConfigureAwait(false);
                 await writer.WriteAsync(job.Tags.ToArray(), NpgsqlDbType.Array | NpgsqlDbType.Varchar, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(job.SequenceKey, NpgsqlDbType.Text, cancellationToken).ConfigureAwait(false);
+                await writer.WriteAsync(SequenceContinueOnDb(job), NpgsqlDbType.Smallint, cancellationToken).ConfigureAwait(false);
             }
 
             count = (int)await writer.CompleteAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await NotifyAsync(connection, transaction, jobs.Where(j => !j.Scheduled).Select(j => j.Queue), cancellationToken).ConfigureAwait(false);
+        await NotifyAsync(connection, transaction, jobs.Where(j => InitialState(j) == "available").Select(j => j.Queue), cancellationToken).ConfigureAwait(false);
+        await NotifySequencesAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
         OxbowDiagnostics.JobsInserted.Add(count);
         return count;
     }
@@ -193,13 +196,41 @@ internal sealed partial class OxbowClient(
     }
 
     public Task<JobRow?> CancelAsync(long id, CancellationToken cancellationToken = default) =>
-        SingleRowAsync(runtime.Sql.Cancel, cancellationToken, ("id", id), ("channel", runtime.Sql.ControlChannel));
+        ThenPromoteSequenceAsync(
+            id,
+            () => SingleRowAsync(runtime.Sql.Cancel, cancellationToken, ("id", id), ("channel", runtime.Sql.ControlChannel)),
+            reread: false,
+            cancellationToken);
 
     public Task<JobRow?> RetryAsync(long id, CancellationToken cancellationToken = default) =>
-        SingleRowAsync(runtime.Sql.Retry, cancellationToken, ("id", id));
+        ThenPromoteSequenceAsync(id, () => SingleRowAsync(runtime.Sql.Retry, cancellationToken, ("id", id)), reread: true, cancellationToken);
 
     public Task<JobRow?> DeleteAsync(long id, CancellationToken cancellationToken = default) =>
-        SingleRowAsync(runtime.Sql.Delete, cancellationToken, ("id", id));
+        ThenPromoteSequenceAsync(id, () => SingleRowAsync(runtime.Sql.Delete, cancellationToken, ("id", id)), reread: false, cancellationToken);
+
+    /// <summary>
+    /// Cancelling, retrying or deleting a sequence job can free its sequence, so promote the next job now rather than
+    /// at the leader's next sweep. A retried job comes back pending, so it's re-read in case it was promoted.
+    /// </summary>
+    private async Task<JobRow?> ThenPromoteSequenceAsync(long id, Func<Task<JobRow?>> action, bool reread, CancellationToken cancellationToken)
+    {
+        string? key;
+        var lookup = runtime.DataSource.CreateCommand(runtime.Sql.SequenceKeyOf);
+        await using (lookup.ConfigureAwait(false))
+        {
+            lookup.Parameters.AddWithValue("id", id);
+            key = await lookup.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        }
+
+        var row = await action().ConfigureAwait(false);
+        if (key is null || row is null)
+        {
+            return row;
+        }
+
+        await SequencePromoter.PromoteAsync(runtime, [key], cancellationToken).ConfigureAwait(false);
+        return reread && row.State == JobState.Pending ? await GetAsync(id, cancellationToken).ConfigureAwait(false) : row;
+    }
 
     public Task<JobRow?> GetAsync(long id, CancellationToken cancellationToken = default) =>
         SingleRowAsync(runtime.Sql.Get, cancellationToken, ("id", id));
@@ -359,6 +390,13 @@ internal sealed partial class OxbowClient(
             job.UniqueStates = UniqueKeys.StatesBitmask(unique);
         }
 
+        job.SequenceKey = SequenceKeys.Resolve(options?.SequenceKey ?? argsDefaults?.SequenceKey, kind, job.EncodedArgs, typeInfo);
+        job.SequenceContinueOn = options?.SequenceContinueOn ?? argsDefaults?.SequenceContinueOn ?? SequenceContinueOn.None;
+        if ((job.SequenceContinueOn & ~(SequenceContinueOn.Cancelled | SequenceContinueOn.Discarded)) != 0)
+        {
+            throw new ArgumentException($"SequenceContinueOn value {(int)job.SequenceContinueOn} is not valid.", nameof(options));
+        }
+
         return job;
     }
 
@@ -431,13 +469,18 @@ internal sealed partial class OxbowClient(
             {
                 Value = jobs.Select(j => j.ScheduledAt is { } at ? (object)at.UtcDateTime : DBNull.Value).ToArray(),
             });
-            command.Parameters.Add(TextArray("state", jobs.Select(j => j.Scheduled ? "scheduled" : "available").ToArray()));
+            command.Parameters.Add(TextArray("state", jobs.Select(InitialState).ToArray()));
             command.Parameters.Add(TextArray("tags", jobs.Select(j => string.Join(',', j.Tags)).ToArray()));
             command.Parameters.Add(new NpgsqlParameter("unique_key", NpgsqlDbType.Array | NpgsqlDbType.Bytea)
             {
                 Value = jobs.Select(j => (object?)j.UniqueKey ?? DBNull.Value).ToArray(),
             });
             command.Parameters.Add(new NpgsqlParameter<int[]>("unique_states", jobs.Select(j => j.UniqueStates).ToArray()));
+            command.Parameters.Add(TextArray("sequence_key", jobs.Select(j => j.SequenceKey!).ToArray()));
+            command.Parameters.Add(new NpgsqlParameter("sequence_continue_on", NpgsqlDbType.Array | NpgsqlDbType.Smallint)
+            {
+                Value = jobs.Select(SequenceContinueOnDb).ToArray(),
+            });
 
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
@@ -454,6 +497,7 @@ internal sealed partial class OxbowClient(
             transaction,
             results.Where(r => !r.UniqueSkippedAsDuplicate && r.Job.State == JobState.Available).Select(r => r.Job.Queue),
             cancellationToken).ConfigureAwait(false);
+        await NotifySequencesAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
 
         var inserted = results.Count(r => !r.UniqueSkippedAsDuplicate);
         if (inserted > 0)
@@ -486,6 +530,35 @@ internal sealed partial class OxbowClient(
             await notify.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <summary>Asks the leader to promote these sequences once the insert commits.</summary>
+    private async Task NotifySequencesAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IReadOnlyList<JobInsertParams> jobs,
+        CancellationToken cancellationToken)
+    {
+        var keys = jobs.Where(j => j.SequenceKey is not null).Select(j => j.SequenceKey!).Distinct(StringComparer.Ordinal).ToArray();
+        if (keys.Length == 0)
+        {
+            return;
+        }
+
+        var notify = new NpgsqlCommand(runtime.Sql.Notify, connection, transaction);
+        await using (notify.ConfigureAwait(false))
+        {
+            notify.Parameters.AddWithValue("channel", runtime.Sql.SequenceChannel);
+            notify.Parameters.Add(TextArray("payloads", keys));
+            await notify.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Sequence jobs wait as pending; promotion is the only way into a sequence's live set.</summary>
+    private static string InitialState(JobInsertParams job) =>
+        job.SequenceKey is not null ? "pending" : job.Scheduled ? "scheduled" : "available";
+
+    private static object SequenceContinueOnDb(JobInsertParams job) =>
+        job.SequenceKey is null ? DBNull.Value : (short)job.SequenceContinueOn;
 
     private static void ValidateCallerConnection(NpgsqlConnection connection, NpgsqlTransaction? transaction)
     {
