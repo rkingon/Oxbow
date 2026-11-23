@@ -10,9 +10,7 @@ namespace Oxbow.DataProtection;
 /// </summary>
 public sealed class DataProtectionJobArgsProtector : IJobArgsProtector
 {
-    /// <summary>The root purpose string; the job kind is the sub-purpose.</summary>
-    public const string Purpose = "Oxbow.Args";
-
+    private const string Purpose = "Oxbow.Args";
     private const int MinSecretLength = 32;
     private readonly IDataProtector _root;
     private readonly byte[]? _uniqueKeySecret;

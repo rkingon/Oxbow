@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format follows
 
 - Args encryption at rest: mark a kind `[EncryptArgs]` or set `OxbowOptions.EncryptAllArgs`, and register a protector.
   The new `Oxbow.DataProtection` package's `AddArgsEncryption()` implements `IJobArgsProtector` on ASP.NET Core Data
-  Protection. Encrypted args are stored as `{"oxbow:enc": "…"}`; unique-by-args keys of encrypted kinds are an HMAC.
+  Protection. Encrypted args are stored as the JSON string `"oxbow:enc:v1:…"`; unique-by-args keys of encrypted kinds are an HMAC.
   `IJobArgsProtector.UnprotectArgs(row)` reads stored args, and `OxbowAssert.ArgsProtector` decrypts in assertions.
   See [docs/encryption.md](docs/encryption.md).
 

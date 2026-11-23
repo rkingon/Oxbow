@@ -36,10 +36,11 @@ the database (`PersistKeysToDbContext`), a file share, Azure Blob Storage, Redis
 ## What's stored
 
 ```json
-{"oxbow:enc": "CfDJ8…"}
+"oxbow:enc:v1:CfDJ8…"
 ```
 
-The args column stays `jsonb`, and no schema change is needed. The payload is a Data Protection payload: it carries the
+A JSON string in the `jsonb` args column, so no schema change is needed. A string rather than an object so that code
+expecting args can't mistake it for them (see [upgrading a fleet](#upgrading-a-fleet)). The payload is a Data Protection payload: it carries the
 ID of the key that made it, and is authenticated. The purpose is `Oxbow.Args` with the job kind as sub-purpose, so a
 payload copied onto a job of another kind fails to decrypt.
 
@@ -106,8 +107,10 @@ queue, tags or metadata instead.
 
 ## Upgrading a fleet
 
-Older Oxbow versions don't know the envelope: they deserialize it as the args, giving a worker default values or an
-error. Upgrade every node that works an encrypted kind, with the protector registered, before inserting encrypted jobs.
+Older Oxbow versions don't know the envelope. They fail to deserialize it into the args type, so the attempt fails and
+is retried, and it succeeds once a node that can decrypt picks it up; the worker never runs with wrong args. Upgrade
+every node that works an encrypted kind, with the protector registered, before inserting encrypted jobs, or those jobs
+spend attempts on old nodes and can be discarded.
 
 ## Testing
 

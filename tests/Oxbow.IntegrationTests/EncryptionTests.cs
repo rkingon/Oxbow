@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Oxbow.Testing;
@@ -51,10 +52,23 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         Assert.Equal(expected, app.Recorder.Events.Order(StringComparer.Ordinal));
 
         Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>(
-            $"SELECT count(*) FROM public.{prefix}job WHERE kind = 'secret' AND (args::text LIKE '%example.com%' OR NOT args ? 'oxbow:enc')"));
+            $"SELECT count(*) FROM public.{prefix}job WHERE kind = 'secret' AND (args::text LIKE '%example.com%' OR jsonb_typeof(args) <> 'string' OR args #>> '{{}}' NOT LIKE 'oxbow:enc:v1:%')"));
         Assert.Equal(4L, await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM public.{prefix}job WHERE kind = 'secret'"));
         Assert.Equal(1L, await database.ScalarAsOwnerAsync<long>(
             $"SELECT count(*) FROM public.{prefix}job WHERE kind = 'record' AND args = '{{\"value\": \"plain@example.com\"}}'"));
+    }
+
+    [Fact]
+    public async Task A_node_that_predates_encryption_fails_to_deserialize_instead_of_running_with_defaults()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix, start: false);
+
+        var job = (await app.Client.InsertAsync(new SecretArgs("ada@example.com"))).Job;
+
+        // What 0.1.0-alpha.3's WorkerRegistration.CreateUnit does with the stored args.
+        Assert.Throws<JsonException>(() => job.Args.Deserialize<SecretArgs>(JsonSerializerOptions.Web));
+        Assert.Throws<JsonException>(() => job.Args.Deserialize<RecordArgs>(JsonSerializerOptions.Web));
     }
 
     [Fact]
@@ -67,7 +81,7 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         await app.WaitForStateAsync(job.Id, JobState.Completed);
 
         Assert.Equal(["hidden"], app.Recorder.Events);
-        Assert.True(job.Args.TryGetProperty("oxbow:enc", out _));
+        Assert.StartsWith("oxbow:enc:v1:", job.Args.GetString(), StringComparison.Ordinal);
         Assert.Equal("hidden", Protector(app).UnprotectArgs(job).GetProperty("value").GetString());
     }
 
@@ -120,7 +134,7 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         await using var app = await StartAsync(prefix, start: false);
 
         var job = (await app.Client.InsertAsync(new SecretArgs("x@example.com"), new InsertOptions { MaxAttempts = 2 })).Job;
-        await database.ExecuteAsOwnerAsync($$"""UPDATE public.{{prefix}}job SET args = '{"oxbow:enc": "tampered"}' WHERE id = {{job.Id}}""");
+        await database.ExecuteAsOwnerAsync($$"""UPDATE public.{{prefix}}job SET args = '"oxbow:enc:v1:tampered"' WHERE id = {{job.Id}}""");
         await app.Host.StartAsync();
 
         var discarded = await app.WaitForStateAsync(job.Id, JobState.Discarded);
@@ -141,7 +155,7 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
 
         var id = await database.ScalarAsOwnerAsync<long>($$"""
             INSERT INTO public.{{prefix}}job (args, kind, queue, state, attempt, attempted_at, max_attempts)
-            VALUES ('{"oxbow:enc": "tampered"}', 'secret', 'default', 'running', 1, now() - interval '1 hour', 2)
+            VALUES ('"oxbow:enc:v1:tampered"', 'secret', 'default', 'running', 1, now() - interval '1 hour', 2)
             RETURNING id
             """);
 
@@ -210,7 +224,7 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
     /// <summary>Data Protection payloads start with a 4-byte magic header, then the key ID.</summary>
     private static Guid KeyIdOf(JobRow job)
     {
-        var payload = job.Args.GetProperty("oxbow:enc").GetString()!.Replace('-', '+').Replace('_', '/');
+        var payload = job.Args.GetString()!["oxbow:enc:v1:".Length..].Replace('-', '+').Replace('_', '/');
         var bytes = Convert.FromBase64String(payload.PadRight(payload.Length + ((4 - (payload.Length % 4)) % 4), '='));
         return new Guid(bytes.AsSpan(4, 16));
     }

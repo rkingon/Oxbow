@@ -52,12 +52,13 @@ public sealed class ArgsEncryptionTests
     public void Envelopes_open_by_shape()
     {
         var sealedArgs = ArgsEnvelope.Seal(_protector.Protect("invoice", """{"invoiceId":"inv-1"}"""));
-        Assert.StartsWith("""{"oxbow:enc":""", sealedArgs, StringComparison.Ordinal);
+        Assert.StartsWith("\"oxbow:enc:v1:", sealedArgs, StringComparison.Ordinal);
 
         Assert.Equal("inv-1", _protector.UnprotectArgs(Row(sealedArgs)).GetProperty("invoiceId").GetString());
         Assert.Equal("plain", _protector.UnprotectArgs(Row("""{"invoiceId":"plain"}""")).GetProperty("invoiceId").GetString());
         Assert.Throws<JobArgsDecryptionException>(() => ArgsEnvelope.Open(Row(sealedArgs), protector: null));
-        Assert.Throws<JobArgsDecryptionException>(() => _protector.UnprotectArgs(Row("""{"oxbow:enc":"tampered"}""")));
+        Assert.Throws<JobArgsDecryptionException>(() => _protector.UnprotectArgs(Row("\"oxbow:enc:v2:payload\"")));
+        Assert.Throws<JobArgsDecryptionException>(() => _protector.UnprotectArgs(Row("\"oxbow:enc:v1:tampered\"")));
     }
 
     private static JobRow Row(string args) => new()

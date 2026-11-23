@@ -274,7 +274,7 @@ producer needs no locks:
 **Executor.** It creates a scope, resolves `IWorker<TArgs>`, deserializes the args, builds the middleware pipeline, runs
 the worker, maps the outcome to a state update and hands it to the completer. Exceptions are caught, so a worker can
 never take the host down. A row whose args fail to deserialize, or to decrypt, is recorded as a failed attempt and
-retried, as in River. Encrypted args (`{"oxbow:enc": …}`) are decrypted by `IJobArgsProtector` just before deserializing.
+retried, as in River. Encrypted args (the JSON string `"oxbow:enc:v1:…"`) are decrypted by `IJobArgsProtector` just before deserializing.
 A kind with no registered worker is handled the River way: the attempt fails with `UnknownJobKindException` in `errors`
 and retries with backoff. A rolling deploy heals itself, and a kind that's really gone ends up visibly `discarded` after
 max attempts.

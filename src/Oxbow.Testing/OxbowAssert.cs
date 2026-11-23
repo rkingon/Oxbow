@@ -142,7 +142,7 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
             return ArgsProtector.UnprotectArgs(row);
         }
 
-        return row.Args.ValueKind == JsonValueKind.Object && row.Args.TryGetProperty("oxbow:enc", out _)
+        return row.Args.ValueKind == JsonValueKind.String && row.Args.GetString()!.StartsWith("oxbow:enc:", StringComparison.Ordinal)
             ? throw new OxbowAssertionException($"Args of job {row.Id} are encrypted. Set OxbowAssert.ArgsProtector to decrypt them.")
             : row.Args;
     }
