@@ -280,32 +280,49 @@ internal sealed partial class OxbowClient(
             job.Metadata["oxbow:batch_id"] = batchId;
         }
 
-        // Callbacks go through insert middleware now, in the caller's context, with an empty result list as for COPY;
-        // the leader inserts them later as prepared.
-        List<JobInsertParams> callbacks = [];
-        void AddCallback(JobInsertParams? callback, string name)
+        // Each callback goes through insert middleware now, in the caller's context, with an empty result list as for
+        // COPY; the leader inserts it later as prepared. Middleware that doesn't call next drops it.
+        async Task<string?> PrepareSpecAsync(JobInsertParams? callback, string name)
         {
-            if (callback is not null)
+            if (callback is null)
             {
-                callback.Metadata["oxbow:batch_id"] = batchId;
-                callback.Metadata["oxbow:batch_callback"] = name;
-                callbacks.Add(callback);
+                return null;
             }
+
+            callback.Metadata["oxbow:batch_id"] = batchId;
+            callback.Metadata["oxbow:batch_callback"] = name;
+            var forwarded = false;
+            await RunInsertPipelineAsync([callback], _ =>
+            {
+                forwarded = true;
+                return Task.FromResult<IReadOnlyList<InsertResult>>([]);
+            }, cancellationToken).ConfigureAwait(false);
+            return forwarded ? CallbackSpec(callback) : null;
         }
 
-        AddCallback(batch.OnComplete, "complete");
-        AddCallback(batch.OnSuccess, "success");
-        if (callbacks.Count > 0)
-        {
-            await RunInsertPipelineAsync(callbacks, _ => Task.FromResult<IReadOnlyList<InsertResult>>([]), cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var insert = new BatchInsert(batchId, CallbackSpec(batch.OnComplete), CallbackSpec(batch.OnSuccess));
+        var insert = new BatchInsert(
+            batchId,
+            await PrepareSpecAsync(batch.OnComplete, "complete").ConfigureAwait(false),
+            await PrepareSpecAsync(batch.OnSuccess, "success").ConfigureAwait(false));
+        var inserted = false;
         var results = await RunInsertPipelineAsync(
             batch.Jobs,
-            context => ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken, insert),
+            context =>
+            {
+                inserted = true;
+                foreach (var job in context.Jobs)
+                {
+                    job.Metadata["oxbow:batch_id"] = batchId;
+                }
+
+                return ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken, insert);
+            },
             cancellationToken).ConfigureAwait(false);
+        if (!inserted)
+        {
+            throw new InvalidOperationException("Insert middleware didn't insert the batch's jobs, so the batch wasn't inserted either.");
+        }
+
         return new BatchInsertResult(batchId, results);
     }
 
@@ -316,7 +333,15 @@ internal sealed partial class OxbowClient(
             return null;
         }
 
+        // Checked again after middleware: a value the job table rejects would fail every finisher pass instead of now.
         ValidateQueueName(job.Queue, allowWildcard: false);
+        if (job.Priority is < 1 or > 4 || job.MaxAttempts is < 1 or > short.MaxValue
+            || job.Tags.Any(t => t.Length > 255 || !TagPattern().IsMatch(t)))
+        {
+            throw new InvalidOperationException(
+                $"Insert middleware left batch callback '{job.Kind}' with an invalid priority, max attempts or tag.");
+        }
+
         var tags = new JsonArray();
         foreach (var tag in job.Tags)
         {

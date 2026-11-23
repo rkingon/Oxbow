@@ -329,6 +329,71 @@ public sealed class BatchTests(PostgresFixture database)
             app.Client.InsertBatchAsync([], new BatchOptions { OnComplete = callback, OnSuccess = callback }));
     }
 
+    [Fact]
+    public async Task Insert_middleware_can_drop_a_callback_but_not_detach_members()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, WorkDefault, b =>
+        {
+            Register(b);
+            b.AddInsertMiddleware<DropSuccessAndClearMetadata>();
+        });
+
+        var inserted = await app.Client.InsertBatchAsync([new InsertManyItem(new RecordArgs("x"))], BothCallbacks);
+        Assert.Equal(inserted.BatchId, inserted.Jobs[0].Job.BatchId);
+
+        var batch = await WaitForBatchAsync(app, inserted.BatchId, b => b.FinalizedAt is not null);
+        Assert.Equal(1, batch.Completed);
+        Assert.NotNull(batch.OnCompleteJobId);
+        Assert.Null(batch.OnSuccessJobId);
+    }
+
+    [Fact]
+    public async Task A_callback_middleware_made_invalid_is_rejected_at_insert()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, register: b =>
+        {
+            Register(b);
+            b.AddInsertMiddleware<BreakCallbackPriority>();
+        }, start: false);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => app.Client.InsertBatchAsync([], BothCallbacks));
+    }
+
+    private static bool IsCallback(JobInsertParams job) => job.Metadata.ContainsKey("oxbow:batch_callback");
+
+    private sealed class DropSuccessAndClearMetadata : IJobInsertMiddleware
+    {
+        public Task<IReadOnlyList<InsertResult>> InvokeAsync(JobInsertContext context, JobInsertDelegate next)
+        {
+            if (context.Jobs.Any(j => IsCallback(j) && j.Metadata["oxbow:batch_callback"]!.GetValue<string>() == "success"))
+            {
+                return Task.FromResult<IReadOnlyList<InsertResult>>([]);
+            }
+
+            foreach (var job in context.Jobs.Where(j => !IsCallback(j)))
+            {
+                job.Metadata.Remove("oxbow:batch_id");
+            }
+
+            return next(context);
+        }
+    }
+
+    private sealed class BreakCallbackPriority : IJobInsertMiddleware
+    {
+        public Task<IReadOnlyList<InsertResult>> InvokeAsync(JobInsertContext context, JobInsertDelegate next)
+        {
+            foreach (var job in context.Jobs.Where(IsCallback))
+            {
+                job.Priority = 5;
+            }
+
+            return next(context);
+        }
+    }
+
     private static Elector ElectorOf(TestApp app) =>
         app.Host.Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>().OfType<OxbowHostedService>().Single().Elector!;
 

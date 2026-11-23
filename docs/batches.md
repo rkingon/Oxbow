@@ -31,11 +31,14 @@ leader failover, or two leaders briefly overlapping, can't enqueue a callback tw
 - `OnSuccess` is enqueued only if every member `completed`: none `discarded`, `cancelled` or deleted.
 - A callback is an ordinary job. It's prepared when the batch is inserted: defaults are resolved, it goes through insert
   middleware there (with an empty result list, as with `InsertManyFastAsync`), so tenant and trace metadata reach it.
-  Middleware therefore sees a callback that may never fire, such as `OnSuccess` of a batch that fails. Its unique key
+  Middleware therefore sees a callback that may never fire, such as `OnSuccess` of a batch that fails. Each callback
+  runs through the pipeline on its own; middleware that doesn't call `next` drops it. Middleware that doesn't call
+  `next` for the members makes `InsertBatchAsync` throw, since a batch without its jobs isn't inserted. Its unique key
   is computed then too.
   The leader inserts it as prepared, so the leader needn't have its args type. `ScheduledAt` is an absolute time.
 - `OnComplete` and `OnSuccess` with the same unique key are rejected, since only one could ever be inserted. A callback
-  that's skipped as a unique duplicate links the existing job.
+  that's skipped as a unique duplicate links the existing job, whose metadata (and so `BatchId`) still names the
+  batch that inserted it.
 - The callback's metadata carries `oxbow:batch_id` and `oxbow:batch_callback` (`complete` or `success`):
 
 ```csharp

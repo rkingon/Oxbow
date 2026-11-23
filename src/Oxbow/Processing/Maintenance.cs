@@ -271,6 +271,7 @@ internal sealed class Maintenance(
                         {
                             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                             {
+                                OxbowDiagnostics.JobsInserted.Add(1);
                                 if (reader.GetString(1) == "available")
                                 {
                                     queues.Add(reader.GetString(0));
