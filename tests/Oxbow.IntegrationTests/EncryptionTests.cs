@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Oxbow.Testing;
@@ -26,6 +27,17 @@ public sealed class SecretWorker(JobRecorder recorder) : IWorker<SecretArgs>
 public sealed record SecretUniqueArgs([property: UniqueKey] string InvoiceId, string TraceId) : IJobArgs
 {
     public InsertOptions GetInsertOptions() => new() { Unique = new() { ByArgs = true } };
+}
+
+[JobKind("secret_token"), EncryptArgs, JsonConverter(typeof(Converter))]
+public sealed record SecretTokenArgs(string Value) : IJobArgs
+{
+    public sealed class Converter : JsonConverter<SecretTokenArgs>
+    {
+        public override SecretTokenArgs Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => new(reader.GetString()!);
+
+        public override void Write(Utf8JsonWriter writer, SecretTokenArgs value, JsonSerializerOptions options) => writer.WriteStringValue(value.Value);
+    }
 }
 
 public sealed class EncryptionTests(PostgresFixture database) : IDisposable
@@ -69,6 +81,16 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         // What 0.1.0-alpha.3's WorkerRegistration.CreateUnit does with the stored args.
         Assert.Throws<JsonException>(() => job.Args.Deserialize<SecretArgs>(JsonSerializerOptions.Web));
         Assert.Throws<JsonException>(() => job.Args.Deserialize<RecordArgs>(JsonSerializerOptions.Web));
+    }
+
+    [Fact]
+    public async Task Encrypted_args_must_serialize_to_an_object()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix, start: false);
+
+        // A string-reading converter on an older node would accept the encrypted string as args.
+        await Assert.ThrowsAsync<ArgumentException>(() => app.Client.InsertAsync(new SecretTokenArgs("token")));
     }
 
     [Fact]
@@ -162,6 +184,29 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         var job = await app.WaitForStateAsync(id, JobState.Discarded);
         Assert.Contains("rescued", job.Errors[0].Error, StringComparison.Ordinal);
         Assert.StartsWith(nameof(JobArgsDecryptionException), job.Errors[1].Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_rescuer_leaves_a_recent_job_it_cannot_decrypt_to_the_default_timeout()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix, o =>
+        {
+            o.RescueStuckJobsAfter = TimeSpan.FromSeconds(1);
+            o.JobTimeout = TimeSpan.FromHours(1);
+        });
+
+        // Another node may hold the key and still be running it.
+        var id = await database.ScalarAsOwnerAsync<long>($$"""
+            INSERT INTO public.{{prefix}}job (args, kind, queue, state, attempt, attempted_at, max_attempts)
+            VALUES ('"oxbow:enc:v1:tampered"', 'secret', 'default', 'running', 1, now() - interval '5 seconds', 2)
+            RETURNING id
+            """);
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        var job = await app.Client.GetAsync(id);
+        Assert.Equal(JobState.Running, job!.State);
+        Assert.Empty(job.Errors);
     }
 
     [Fact]

@@ -181,19 +181,24 @@ internal sealed class Maintenance(
                 try
                 {
                     var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector);
-                    var timeout = unit.GetTimeout() ?? runtime.Options.JobTimeout;
-
-                    // River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.
-                    if (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout))
+                    if (MayStillBeRunning(job, unit.GetTimeout() ?? runtime.Options.JobTimeout, now))
                     {
                         return null;
                     }
 
                     nextRetry = unit.GetNextRetry();
                 }
-                catch (Exception ex) when (ex is JsonException or JobArgsDecryptionException)
+                catch (JsonException)
                 {
-                    // Args that can't be decrypted or deserialized are retried by the retry policy, then discarded.
+                    // Args that can't be deserialized are retried by the retry policy, then discarded.
+                }
+                catch (JobArgsDecryptionException) when (MayStillBeRunning(job, runtime.Options.JobTimeout, now))
+                {
+                    // Only this node may lack the key, so the job may be running elsewhere: hold to the default timeout.
+                    return null;
+                }
+                catch (JobArgsDecryptionException)
+                {
                 }
             }
         }
@@ -205,6 +210,10 @@ internal sealed class Maintenance(
 
         return (JobState.Retryable, nextRetry ?? retryPolicy.NextRetry(job), null);
     }
+
+    /// <summary>River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.</summary>
+    private static bool MayStillBeRunning(JobRow job, TimeSpan timeout, DateTimeOffset now) =>
+        OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout);
 
     internal async Task CleanAsync(CancellationToken cancellationToken)
     {

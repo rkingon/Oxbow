@@ -367,6 +367,12 @@ internal sealed partial class OxbowClient(
 
         if (protector is not null)
         {
+            // Envelope safety on older nodes relies on args being an object: a string-reading converter would accept it.
+            if (!job.EncodedArgs.StartsWith('{'))
+            {
+                throw new ArgumentException($"Job kind '{kind}' encrypts its args, so they must serialize to a JSON object.", nameof(args));
+            }
+
             job.EncodedArgs = ArgsEnvelope.Seal(protector.Protect(kind, job.EncodedArgs));
         }
 

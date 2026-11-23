@@ -39,10 +39,16 @@ the database (`PersistKeysToDbContext`), a file share, Azure Blob Storage, Redis
 "oxbow:enc:v1:CfDJ8…"
 ```
 
-A JSON string in the `jsonb` args column, so no schema change is needed. A string rather than an object so that code
-expecting args can't mistake it for them (see [upgrading a fleet](#upgrading-a-fleet)). The payload is a Data Protection payload: it carries the
-ID of the key that made it, and is authenticated. The purpose is `Oxbow.Args` with the job kind as sub-purpose, so a
-payload copied onto a job of another kind fails to decrypt.
+A JSON string in the `jsonb` args column, so no schema change is needed. It's a string, and encrypted args must
+serialize to a JSON object (inserting one that doesn't throws), so code expecting the args can't mistake one for the
+other (see [upgrading a fleet](#upgrading-a-fleet)). The `oxbow:enc:` prefix is reserved: a stored string args value
+starting with it is treated as encrypted.
+
+The payload is a Data Protection payload: it carries the ID of the key that made it, and is authenticated. The purpose is
+`Oxbow.Args` with the job kind as sub-purpose, so a payload copied onto a job of another kind fails to decrypt.
+
+This protects args from people who can read the database, not from people who can write to it: someone with write
+access can still replace a job's args with plaintext, or copy one job's payload onto another job of the same kind.
 
 Only args are encrypted. Kind, queue, tags, metadata and `errors` stay plaintext. Keep secrets out of tags and metadata,
 and out of the messages of exceptions your workers throw: the message is recorded in `errors`.
@@ -75,7 +81,9 @@ run. A revoked or deleted key makes its jobs fail to decrypt.
 
 A job whose args can't be decrypted (missing key, tampered payload, no protector registered on the worker) fails its
 attempt with `JobArgsDecryptionException`, like args that fail to deserialize. It's retried with the retry policy and
-discarded after its max attempts. The rescuer treats it the same way.
+discarded after its max attempts. The rescuer treats it the same way, except that it can't call the worker's
+`GetTimeout`: since only the leader may lack the key, it waits for `OxbowOptions.JobTimeout` to pass since the attempt
+started before rescuing the job.
 
 Decryption is chosen by the stored shape, not by the kind's current setting. Turning encryption off for a kind leaves
 its encrypted jobs workable as long as a protector is still registered, and turning it on leaves its plaintext jobs
@@ -108,7 +116,8 @@ queue, tags or metadata instead.
 ## Upgrading a fleet
 
 Older Oxbow versions don't know the envelope. They fail to deserialize it into the args type, so the attempt fails and
-is retried, and it succeeds once a node that can decrypt picks it up; the worker never runs with wrong args. Upgrade
+is retried, and it succeeds once a node that can decrypt picks it up; the worker never runs with wrong args. (That
+holds unless the args type has a custom converter that reads both objects and strings.) Upgrade
 every node that works an encrypted kind, with the protector registered, before inserting encrypted jobs, or those jobs
 spend attempts on old nodes and can be discarded.
 

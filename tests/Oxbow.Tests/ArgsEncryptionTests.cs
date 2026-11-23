@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Oxbow.DataProtection;
 using Oxbow.Internal;
 
@@ -46,6 +48,21 @@ public sealed class ArgsEncryptionTests
         Assert.Throws<ArgumentException>(() => new DataProtectionJobArgsProtector(new EphemeralDataProtectionProvider(), new byte[16]));
         var withoutSecret = new DataProtectionJobArgsProtector(new EphemeralDataProtectionProvider());
         Assert.Throws<InvalidOperationException>(() => withoutSecret.HashUniqueKey("key"u8));
+    }
+
+    [Fact]
+    public void Misconfiguration_fails_on_resolve()
+    {
+        using var withoutDataProtection = new ServiceCollection().AddOxbow().AddArgsEncryption().Services.BuildServiceProvider();
+        var ex = Assert.Throws<InvalidOperationException>(withoutDataProtection.GetRequiredService<IJobArgsProtector>);
+        Assert.Contains("AddDataProtection", ex.Message, StringComparison.Ordinal);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(NpgsqlDataSource.Create("Host=localhost"));
+        services.AddOxbow(o => o.EncryptAllArgs = true);
+        using var withoutProtector = services.BuildServiceProvider();
+        ex = Assert.Throws<InvalidOperationException>(withoutProtector.GetRequiredService<OxbowRuntime>);
+        Assert.Contains("EncryptAllArgs", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
