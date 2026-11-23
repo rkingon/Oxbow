@@ -218,14 +218,140 @@ internal sealed class OxbowSql
         ListTemplate = $"""
             SELECT {Columns(prefix + "job")}
             FROM {job}
-            WHERE (@states::text[] IS NULL OR state::text = ANY(@states))
-              AND (@queues::text[] IS NULL OR queue = ANY(@queues))
-              AND (@kinds::text[] IS NULL OR kind = ANY(@kinds))
-              AND (@after::bigint IS NULL OR id {"{0}"} @after)
-              AND (@batch_id::bigint IS NULL OR batch_id = @batch_id)
-            ORDER BY id {"{1}"}
+            WHERE {"{0}"}
+              AND (@after::bigint IS NULL OR id {"{1}"} @after)
+            ORDER BY id {"{2}"}
             LIMIT @limit
             """;
+
+        // The bulk operations run one batch per statement, walking IDs upward from @after to @until, the highest ID when
+        // the operation started, so a stream of matching inserts can't keep it going. Each returns scanned, last_id,
+        // affected, then cancel requests or skipped unique conflicts. Rows are locked in ID order and waited for rather
+        // than skipped, so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
+        CancelManyTemplate = $"""
+            WITH locked AS (
+                SELECT id
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state NOT IN ('cancelled', 'completed', 'discarded')
+                  AND finalized_at IS NULL
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            updated AS (
+                UPDATE {job} AS j
+                SET
+                    state = CASE WHEN j.state = 'running' THEN j.state ELSE 'cancelled' END,
+                    finalized_at = CASE WHEN j.state = 'running' THEN j.finalized_at ELSE now() END,
+                    metadata = jsonb_set(j.metadata, ARRAY['cancel_attempted_at'], to_jsonb(now()), true)
+                FROM locked
+                WHERE j.id = locked.id
+                RETURNING j.id, j.queue, j.state = 'running' AS running
+            ),
+            -- One NOTIFY per queue per 300 running jobs: 300 IDs plus the longest queue name stay under the 8000-byte
+            -- payload limit.
+            notified AS (
+                SELECT pg_notify(@channel, json_build_object('action', 'cancel', 'queue', queue, 'job_ids', json_agg(id ORDER BY id))::text)
+                FROM (
+                    SELECT id, queue, (row_number() OVER (PARTITION BY queue ORDER BY id) - 1) / 300 AS chunk
+                    FROM updated
+                    WHERE running
+                ) AS r
+                GROUP BY queue, chunk
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM updated WHERE NOT running),
+                (SELECT count(*) FROM updated WHERE running),
+                -- Referenced so the NOTIFYs run; an unreferenced CTE is never evaluated.
+                (SELECT count(*) FROM notified)
+            """;
+
+        // A job that would take a unique key another live job holds is skipped (RetryAsync would throw instead), as are
+        // all but the lowest ID of batch rows that would take the same key. A holder committed after the statement's
+        // snapshot still raises a unique violation; the client reruns the batch, whose new snapshot sees it.
+        RetryManyTemplate = $"""
+            WITH locked AS (
+                SELECT id, state, unique_key, unique_states
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state <> 'running'
+                  AND NOT (state = 'available' AND scheduled_at < now())
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            claiming AS (
+                SELECT id, unique_key, row_number() OVER (PARTITION BY unique_key ORDER BY id) AS row_num
+                FROM locked
+                WHERE unique_key IS NOT NULL
+                  AND unique_states IS NOT NULL
+                  AND {bitmask}(unique_states, 'available')
+                  AND NOT {bitmask}(unique_states, state)
+            ),
+            conflicts AS (
+                SELECT c.id
+                FROM claiming AS c
+                WHERE c.row_num > 1
+                   OR EXISTS (
+                       SELECT 1 FROM {job} AS o
+                       WHERE o.unique_key = c.unique_key
+                         AND o.id <> c.id
+                         AND o.unique_states IS NOT NULL
+                         AND {bitmask}(o.unique_states, o.state))
+            ),
+            updated AS (
+                UPDATE {job} AS j
+                SET
+                    state = 'available',
+                    max_attempts = CASE WHEN j.attempt = j.max_attempts THEN j.max_attempts + 1 ELSE j.max_attempts END,
+                    finalized_at = NULL,
+                    metadata = j.metadata - 'cancel_attempted_at',
+                    scheduled_at = now()
+                FROM locked
+                WHERE j.id = locked.id
+                  AND locked.id NOT IN (SELECT id FROM conflicts)
+                RETURNING j.id
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM updated),
+                (SELECT count(*) FROM conflicts)
+            """;
+
+        DeleteManyTemplate = $"""
+            WITH locked AS (
+                SELECT id
+                FROM {job}
+                WHERE {"{0}"}
+                  AND id > @after
+                  AND id <= @until
+                  AND state <> 'running'
+                ORDER BY id
+                LIMIT @limit
+                FOR UPDATE
+            ),
+            deleted AS (
+                DELETE FROM {job} AS j
+                USING locked
+                WHERE j.id = locked.id
+                RETURNING j.id
+            )
+            SELECT
+                (SELECT count(*) FROM locked),
+                (SELECT max(id) FROM locked),
+                (SELECT count(*) FROM deleted),
+                0::bigint
+            """;
+
+        MaxJobId = $"SELECT coalesce(max(id), 0) FROM {job}";
 
         GetCancelRequested = $"""
             SELECT id FROM {job}
@@ -579,8 +705,22 @@ internal sealed class OxbowSql
 
     public string Get { get; }
 
-    /// <summary>Format with the keyset comparison (<c>&gt;</c> or <c>&lt;</c>) and the order (<c>ASC</c> or <c>DESC</c>).</summary>
+    /// <summary>
+    /// Format with the <see cref="JobFilterSql"/> clause, the keyset comparison (<c>&gt;</c> or <c>&lt;</c>) and the
+    /// order (<c>ASC</c> or <c>DESC</c>).
+    /// </summary>
     public string ListTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string CancelManyTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string RetryManyTemplate { get; }
+
+    /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
+    public string DeleteManyTemplate { get; }
+
+    public string MaxJobId { get; }
 
     public string GetCancelRequested { get; }
 

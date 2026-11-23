@@ -123,7 +123,14 @@ public sealed record Charge([property: UniqueKey] string InvoiceId, string Trace
 ## Managing jobs and queues
 
 `CancelAsync`, `RetryAsync`, `DeleteAsync`, `GetAsync`, `ListAsync` (filters and a cursor), `PauseQueueAsync`,
-`ResumeQueueAsync` on `IOxbowClient`.
+`ResumeQueueAsync` on `IOxbowClient`. `CancelManyAsync`, `RetryManyAsync` and `DeleteManyAsync` act on every job
+matching a filter, in batches:
+
+```csharp
+await oxbow.CancelManyAsync(new JobFilter { Metadata = new JsonObject { ["tenant"] = "acme" } });
+```
+
+Filters cover states, queues, kinds, metadata containment and tags. See [managing jobs](docs/managing-jobs.md).
 
 ## Periodic jobs
 

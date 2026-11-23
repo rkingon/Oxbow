@@ -18,6 +18,8 @@ internal sealed partial class OxbowClient(
     private readonly IJobInsertMiddleware[] _insertMiddleware = insertMiddleware.ToArray();
     private readonly ConcurrentDictionary<string, long> _lastNotified = new(StringComparer.Ordinal);
 
+    private const int BulkBatchSize = 1_000;
+
     public async Task<InsertResult> InsertAsync<TArgs>(TArgs args, InsertOptions? options = null, CancellationToken cancellationToken = default)
         where TArgs : IJobArgs
     {
@@ -409,26 +411,119 @@ internal sealed partial class OxbowClient(
                 : throw new ArgumentException("The cursor is not valid.", nameof(query));
         }
 
-        var sql = string.Format(
-            CultureInfo.InvariantCulture,
-            runtime.Sql.ListTemplate,
-            query.Descending ? "<" : ">",
-            query.Descending ? "DESC" : "ASC");
-
-        var command = runtime.DataSource.CreateCommand(sql);
+        var command = runtime.DataSource.CreateCommand();
         await using (command.ConfigureAwait(false))
         {
-            command.Parameters.Add(TextArray("states", query.States?.Select(JobStates.ToDb).ToArray()));
-            command.Parameters.Add(TextArray("queues", query.Queues?.ToArray()));
-            command.Parameters.Add(TextArray("kinds", query.Kinds?.ToArray()));
+            command.CommandText = string.Format(
+                CultureInfo.InvariantCulture,
+                runtime.Sql.ListTemplate,
+                JobFilterSql.Where(query, runtime.Sql.StateTypeName, command.Parameters),
+                query.Descending ? "<" : ">",
+                query.Descending ? "DESC" : "ASC");
             command.Parameters.Add(new NpgsqlParameter("after", NpgsqlDbType.Bigint) { Value = (object?)after ?? DBNull.Value });
-            command.Parameters.Add(new NpgsqlParameter("batch_id", NpgsqlDbType.Bigint) { Value = (object?)query.BatchId ?? DBNull.Value });
             command.Parameters.AddWithValue("limit", query.Limit);
             var jobs = await JobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
             var nextCursor = jobs.Count == query.Limit
                 ? jobs[^1].Id.ToString(CultureInfo.InvariantCulture)
                 : null;
             return new JobListResult(jobs, nextCursor);
+        }
+    }
+
+    public async Task<CancelManyResult> CancelManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (cancelled, requested) = await ManyAsync(runtime.Sql.CancelManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new CancelManyResult(cancelled, requested);
+    }
+
+    public async Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (retried, skipped) = await ManyAsync(runtime.Sql.RetryManyTemplate, filter, cancellationToken).ConfigureAwait(false);
+        return new RetryManyResult(retried, skipped);
+    }
+
+    public async Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default) =>
+        (await ManyAsync(runtime.Sql.DeleteManyTemplate, filter, cancellationToken).ConfigureAwait(false)).Affected;
+
+    private async Task<(long Affected, long Other)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        if (filter is JobListQuery)
+        {
+            throw new ArgumentException(
+                "Bulk operations act on every matching job, not a page, so they don't take a JobListQuery. Pass a JobFilter.",
+                nameof(filter));
+        }
+
+        if (!filter.All && JobFilterSql.MatchesEverything(filter))
+        {
+            throw new ArgumentException(
+                "The filter matches every job. Set a filter, or set JobFilter.All to act on every job.", nameof(filter));
+        }
+
+        long until;
+        var max = runtime.DataSource.CreateCommand(runtime.Sql.MaxJobId);
+        await using (max.ConfigureAwait(false))
+        {
+            until = (long)(await max.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        }
+
+        long after = 0, affected = 0, other = 0;
+        while (true)
+        {
+            var batch = await ManyBatchAsync(template, filter, after, until, cancellationToken).ConfigureAwait(false);
+            affected += batch.Affected;
+            other += batch.Other;
+            if (batch.Scanned < BulkBatchSize)
+            {
+                return (affected, other);
+            }
+
+            after = batch.LastId;
+        }
+    }
+
+    private async Task<(long Scanned, long LastId, long Affected, long Other)> ManyBatchAsync(
+        string template,
+        JobFilter filter,
+        long after,
+        long until,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var command = runtime.DataSource.CreateCommand();
+            await using (command.ConfigureAwait(false))
+            {
+                command.CommandText = string.Format(
+                    CultureInfo.InvariantCulture,
+                    template,
+                    JobFilterSql.Where(filter, runtime.Sql.StateTypeName, command.Parameters));
+                command.Parameters.AddWithValue("after", after);
+                command.Parameters.AddWithValue("until", until);
+                command.Parameters.AddWithValue("limit", BulkBatchSize);
+                command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
+                try
+                {
+                    var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                    await using (reader.ConfigureAwait(false))
+                    {
+                        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                        return (
+                            reader.GetInt64(0),
+                            reader.IsDBNull(1) ? after : reader.GetInt64(1),
+                            reader.GetInt64(2),
+                            reader.GetInt64(3));
+                    }
+                }
+
+                // Batches lock in ID order but the completer doesn't, so the two can deadlock on running jobs. A unique
+                // violation means a bulk retry raced a newly committed holder of a key, which the rerun skips.
+                catch (PostgresException ex) when (
+                    (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.UniqueViolation) && attempt < 3)
+                {
+                }
+            }
         }
     }
 

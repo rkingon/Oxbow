@@ -57,7 +57,8 @@ public sealed class ImportFinishedWorker(IOxbowClient oxbow) : IWorker<ImportFin
 
 `GetBatchAsync(id)` returns `Total`, `Completed`, `Discarded`, `Cancelled` and `Remaining`, counted from the members
 with one aggregate query until the batch finishes, then frozen on the batch row. Members carry `oxbow:batch_id` in
-their metadata too (`JobRow.BatchId`), and `JobListQuery.BatchId` lists them.
+their metadata too (`JobRow.BatchId`), and `JobFilter.BatchId` lists them, or cancels, retries or deletes them in
+bulk (see [managing jobs](managing-jobs.md)).
 
 Counters aren't kept on the batch row as jobs finish: the completer writes thousands of outcomes per statement, and
 one row updated by every write would serialize them.
