@@ -50,6 +50,26 @@ public static class OxbowDbContextExtensions
         return client.InsertManyAsync(connection, transaction, items, cancellationToken);
     }
 
+    /// <summary>Inserts a batch of jobs in <paramref name="dbContext"/>'s current transaction.</summary>
+    /// <param name="client">The Oxbow client.</param>
+    /// <param name="dbContext">A context using Npgsql, with a transaction begun.</param>
+    /// <param name="items">The member jobs.</param>
+    /// <param name="options">The callbacks.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch ID and the insert results, in order.</returns>
+    /// <exception cref="InvalidOperationException">The context has no current transaction.</exception>
+    public static Task<BatchInsertResult> InsertBatchAsync(
+        this IOxbowClient client,
+        DbContext dbContext,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        var (connection, transaction) = Resolve(dbContext);
+        return client.InsertBatchAsync(connection, transaction, items, options, cancellationToken);
+    }
+
     private static (NpgsqlConnection Connection, NpgsqlTransaction Transaction) Resolve(DbContext dbContext)
     {
         ArgumentNullException.ThrowIfNull(dbContext);

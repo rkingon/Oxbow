@@ -17,6 +17,9 @@ public record JobFilter
     /// <summary>Only jobs of these kinds.</summary>
     public IReadOnlyList<string>? Kinds { get; init; }
 
+    /// <summary>Only members of this batch.</summary>
+    public long? BatchId { get; init; }
+
     /// <summary>
     /// Only jobs whose metadata contains this object (JSON containment, <c>@&gt;</c>): <c>{"tenant": "acme"}</c>
     /// matches any job with that key and value, whatever else its metadata holds.

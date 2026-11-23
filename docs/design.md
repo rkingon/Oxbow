@@ -83,6 +83,10 @@ CREATE TABLE {s}.{p}queue (name text PRIMARY KEY, created_at, metadata jsonb, pa
 CREATE TABLE {s}.{p}migration (version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 ```
 
+Version 2 adds, for [batches](batches.md), `{p}batch` (counts, prepared callbacks and their job IDs; partial indexes on
+unfinished and finished rows) and a nullable `{p}job.batch_id` with `{p}job_batch_idx (batch_id, state) WHERE batch_id
+IS NOT NULL`, which serves both the finisher's "any live member?" probe and the progress aggregate.
+
 The `{p}migration` table is a version marker that each script writes to. Nothing reads it as a migration runner. At
 startup the client checks `max(version)` against the version it requires and fails fast with a message naming the
 missing versions and how to get their SQL. It never applies them.
@@ -205,8 +209,10 @@ builder.Services.AddOxbow(o =>
 | `InsertManyAsync(IEnumerable<InsertManyItem>, ct)` and the connection/transaction overload | Multi-row `INSERT … SELECT unnest(…)` with unique support; returns rows (see bulk insert). |
 | `CancelAsync(id, ct)` | Not started: becomes cancelled immediately. Running: `cancel_attempted_at` is set and a control NOTIFY goes out. Finalized: returned as is. |
 | `RetryAsync(id, ct)`, `DeleteAsync(id, ct)`, `GetAsync(id, ct)` | River semantics. Delete and retry never touch a running job. |
-| `ListAsync(JobListQuery, ct)` | Filters (`JobFilter`: kinds, queues, states, metadata containment, tags), ascending or descending by ID, keyset cursor. |
+| `ListAsync(JobListQuery, ct)` | Filters (`JobFilter`: kinds, queues, states, batch, metadata containment, tags), ascending or descending by ID, keyset cursor. |
 | `CancelManyAsync(JobFilter, ct)`, `RetryManyAsync(JobFilter, ct)`, `DeleteManyAsync(JobFilter, ct)` | The single-job semantics over every match, 1,000 jobs per statement in ID order up to the highest ID at the start, each batch its own transaction. A filter matching everything needs `All = true`; a `JobListQuery` is rejected, since its paging would suggest only a page is affected. Bulk cancel sends one control NOTIFY per queue per 300 running jobs (`{action:"cancel", queue, job_ids}`). Bulk retry skips, and counts, jobs whose unique key another live job holds. Returns counts. |
+| `InsertBatchAsync(items, BatchOptions?, ct)` and the connection/transaction overload | The batch row and its jobs in one statement (`WITH jobs AS (INSERT …) INSERT INTO {p}batch …`), so it's atomic even in autocommit. Callbacks are prepared and stored on the batch row. |
+| `GetBatchAsync(id, ct)` | Progress: aggregated from members until finished, frozen on the batch row after. |
 | `PauseQueueAsync(name, ct)`, `ResumeQueueAsync(name, ct)` | Updates the `{p}queue` row and sends a control NOTIFY in one statement; `"*"` means all queues. |
 
 `InsertResult` is `(JobRow Job, bool UniqueSkippedAsDuplicate)`. EF: `client.InsertAsync(dbContext, args, …)` uses
@@ -298,8 +304,10 @@ which wakes the followers at once.
 |---|---|---|
 | Scheduler | every 5 s | Moves due `scheduled` and `retryable` jobs to `available`, discarding unique-key conflicts as River's `JobSchedule` does, then NOTIFYs the affected queues. |
 | Rescuer | every 30 s, after 1 h | Takes `running` jobs whose later of `attempted_at` and `metadata.oxbow:heartbeat_at` is older than the horizon. If cancel was attempted, they become cancelled; if the attempt heartbeated, rescued; still inside their own timeout (when the leader knows the kind), left alone; otherwise retried with backoff or discarded by attempts. A kind the leader has no worker for is retried with the global policy, not discarded (see differences). Increments `metadata.oxbow:rescue_count`. |
-| Job cleaner | every 30 s | Deletes `completed` older than 24 h, `cancelled` older than 24 h and `discarded` older than 7 d, in batches. A retention of `Timeout.InfiniteTimeSpan` keeps them forever. |
+| Job cleaner | every 30 s | Deletes `completed` older than 24 h, `cancelled` older than 24 h and `discarded` older than 7 d, in batches. A retention of `Timeout.InfiniteTimeSpan` keeps them forever. Skips members of a `{p}batch` row that still exists. |
 | Queue cleaner | every 1 h | Deletes `{p}queue` rows not updated for 24 h. |
+| Batch finisher | every 1 s | For each unfinished batch with no live member, one statement locks the batch row (`FOR UPDATE SKIP LOCKED`, rechecking `finalized_at IS NULL`), counts members, inserts the prepared callbacks and freezes the counts. See [batches](batches.md). |
+| Batch cleaner | every 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callback jobs are finalized or gone. |
 | Periodic enqueuer | timer | See below. |
 | Queue depth | every 10 s | `count(*)` by queue and state, published as an observable gauge. |
 

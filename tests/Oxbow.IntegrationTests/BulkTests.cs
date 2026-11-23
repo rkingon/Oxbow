@@ -202,6 +202,18 @@ public sealed class BulkTests(PostgresFixture database)
     }
 
     [Fact]
+    public async Task Cancel_many_by_batch_cancels_only_its_members()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var batch = await app.Client.InsertBatchAsync(Enumerable.Range(0, 3).Select(i => new InsertManyItem(new RecordArgs($"{i}"), Idle("acme"))));
+        var outside = (await app.Client.InsertAsync(new RecordArgs("x"), Idle("acme"))).Job.Id;
+
+        Assert.Equal(new CancelManyResult(3, 0), await app.Client.CancelManyAsync(new JobFilter { BatchId = batch.BatchId }));
+        Assert.Equal(JobState.Available, (await app.Client.GetAsync(outside))!.State);
+    }
+
+    [Fact]
     public async Task Delete_many_skips_running_jobs()
     {
         var prefix = await database.CreateSchemaAsync();

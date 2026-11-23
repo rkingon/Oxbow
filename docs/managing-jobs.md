@@ -22,6 +22,7 @@ var acme = new JobFilter
 | Filter | Matches |
 |---|---|
 | `States`, `Queues`, `Kinds` | Any of the values. |
+| `BatchId` | Members of a [batch](batches.md). |
 | `Metadata` | Jobs whose metadata contains the object (`@>`): `{"tenant": "acme"}` matches any job with that key and value, and nested objects match the same way. Served by the metadata GIN index. |
 | `Tags` | Jobs carrying all of the tags. |
 

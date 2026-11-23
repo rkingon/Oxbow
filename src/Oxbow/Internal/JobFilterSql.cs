@@ -13,13 +13,14 @@ internal static class JobFilterSql
         filter.States is null
         && filter.Queues is null
         && filter.Kinds is null
+        && filter.BatchId is null
         && (filter.Metadata is null || filter.Metadata.Count == 0)
         && (filter.Tags is null || filter.Tags.Count == 0);
 
     /// <summary>The clause, with its parameters added to <paramref name="parameters"/>.</summary>
     public static string Where(JobFilter filter, string stateTypeName, NpgsqlParameterCollection parameters)
     {
-        var clauses = new List<string>(5);
+        var clauses = new List<string>(6);
         if (filter.States is { } states)
         {
             clauses.Add($"state = ANY(@filter_states::{stateTypeName}[])");
@@ -36,6 +37,12 @@ internal static class JobFilterSql
         {
             clauses.Add("kind = ANY(@filter_kinds)");
             parameters.Add(OxbowClient.TextArray("filter_kinds", kinds.ToArray()));
+        }
+
+        if (filter.BatchId is { } batchId)
+        {
+            clauses.Add("batch_id = @filter_batch_id");
+            parameters.Add(new NpgsqlParameter("filter_batch_id", NpgsqlDbType.Bigint) { Value = batchId });
         }
 
         if (filter.Metadata is { Count: > 0 } metadata)

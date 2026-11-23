@@ -51,4 +51,7 @@ internal static partial class Log
 
     [LoggerMessage(16, LogLevel.Warning, "A cancellation callback threw while disposing Oxbow.")]
     public static partial void CancelCallbackFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(40, LogLevel.Error, "Finishing batch {BatchId} failed; retrying on the next pass.")]
+    public static partial void BatchFinishFailed(ILogger logger, Exception exception, long batchId);
 }
