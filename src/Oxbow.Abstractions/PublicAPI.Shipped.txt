@@ -400,3 +400,8 @@ virtual Oxbow.JobFilter.EqualityContract.get -> System.Type!
 virtual Oxbow.JobFilter.Equals(Oxbow.JobFilter? other) -> bool
 virtual Oxbow.JobFilter.PrintMembers(System.Text.StringBuilder! builder) -> bool
 virtual Oxbow.JobWorkDelegate.Invoke(Oxbow.JobContext! context) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime
+Oxbow.IJobRuntime.HeartbeatAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime.ReportProgressAsync(double percent, string? message, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime.UtcNow.get -> System.DateTimeOffset
+Oxbow.Job<TArgs>.Job(Oxbow.JobRow! row, TArgs args, Oxbow.IJobRuntime! runtime) -> void
