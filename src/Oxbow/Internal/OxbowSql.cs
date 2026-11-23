@@ -290,6 +290,7 @@ internal sealed class OxbowSql
             FROM {job}
             WHERE state = 'running'
               AND attempted_at < @stuck_horizon
+              AND {LastSeen(prefix + "job")} < @stuck_horizon
               AND id > @after_id
             ORDER BY id
             LIMIT @max
@@ -310,8 +311,28 @@ internal sealed class OxbowSql
                 AS r(id, error, finalized_at, scheduled_at, state)
             WHERE j.id = r.id
               AND j.state = 'running'
-              AND j.attempted_at < @stuck_horizon
+              AND {LastSeen("j")} < @stuck_horizon
             RETURNING {Columns("j")}
+            """;
+
+        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing.
+        Heartbeat = $"""
+            UPDATE {job}
+            SET metadata = metadata || jsonb_build_object('oxbow:heartbeat_at', now())
+            WHERE id = @id
+              AND state = 'running'
+              AND attempted_at = @attempted_at
+            """;
+
+        ReportProgress = $"""
+            UPDATE {job}
+            SET metadata = metadata || jsonb_build_object(
+                'oxbow:heartbeat_at', now(),
+                'oxbow:progress', jsonb_build_object(
+                    'percent', @percent::float8, 'message', @message::text, 'attempt', attempt, 'at', now()))
+            WHERE id = @id
+              AND state = 'running'
+              AND attempted_at = @attempted_at
             """;
 
         DeleteFinalized = $"""
@@ -442,6 +463,10 @@ internal sealed class OxbowSql
 
     public string RescueMany { get; }
 
+    public string Heartbeat { get; }
+
+    public string ReportProgress { get; }
+
     public string DeleteFinalized { get; }
 
     public string CountByQueueAndState { get; }
@@ -463,6 +488,15 @@ internal sealed class OxbowSql
     public string QueueResume { get; }
 
     public string QueueDeleteExpired { get; }
+
+    /// <summary>
+    /// The later of a job's attempted_at and its heartbeat. The heartbeat is metadata anyone can write, so a value that
+    /// isn't a timestamp is ignored rather than cast, which would fail the whole rescue.
+    /// </summary>
+    private static string LastSeen(string alias) =>
+        $"greatest({alias}.attempted_at, CASE WHEN jsonb_typeof({alias}.metadata -> 'oxbow:heartbeat_at') = 'string' " +
+        $"AND pg_input_is_valid({alias}.metadata ->> 'oxbow:heartbeat_at', 'timestamptz') " +
+        $"THEN ({alias}.metadata ->> 'oxbow:heartbeat_at')::timestamptz END)";
 
     /// <summary>The row columns, in the order <see cref="JobRowReader"/> reads them.</summary>
     private static string Columns(string alias) =>

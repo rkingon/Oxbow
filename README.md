@@ -14,8 +14,10 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Scheduled and periodic (interval or cron) jobs
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
+- Heartbeat and progress for long-running jobs
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner
 - Insert and work middleware, OpenTelemetry-ready `ActivitySource` and `Meter`
+- Args encryption at rest, per kind or for all, on ASP.NET Core Data Protection
 - **You own the migrations**, and the runtime works as a least-privilege role
 
 ## Quickstart
@@ -172,6 +174,7 @@ builder.Services.AddOpenTelemetry()
 | `Oxbow` | The client, processor and schema |
 | `Oxbow.EntityFrameworkCore` | Insert in a `DbContext`'s transaction; schema helpers for EF migrations |
 | `Oxbow.Testing` | Insert assertions and an inline worker harness |
+| `Oxbow.DataProtection` | Encrypt args at rest with ASP.NET Core Data Protection |
 | `Oxbow.Cli` | The `oxbow` dotnet tool: print or apply the schema |
 
 ## Docs

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Oxbow.Processing;
 
 namespace Oxbow.Internal;
 
@@ -8,7 +9,7 @@ internal abstract class WorkerRegistration
 {
     public abstract Type ArgsType { get; }
 
-    public abstract WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json);
+    public abstract WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector);
 }
 
 internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
@@ -17,10 +18,10 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
 {
     public override Type ArgsType => typeof(TArgs);
 
-    public override WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json)
+    public override WorkUnit CreateUnit(JobRow row, IServiceProvider services, JsonSerializerOptions json, IJobArgsProtector? protector)
     {
         var typeInfo = (JsonTypeInfo<TArgs>)json.GetTypeInfo(typeof(TArgs));
-        var args = row.Args.Deserialize(typeInfo)
+        var args = ArgsEnvelope.Open(row, protector).Deserialize(typeInfo)
             ?? throw new JsonException($"Args for job {row.Id} deserialized to null.");
         IWorker<TArgs> worker = services.GetRequiredService<TWorker>();
         return new Unit(worker, new Job<TArgs>(row, args));
@@ -36,6 +37,7 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
 
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
 
+        public override void Attach(JobControl control) => job.Control = control;
         public override object? Output => job.Output;
     }
 }
@@ -50,6 +52,7 @@ internal abstract class WorkUnit
 
     public abstract Task WorkAsync(CancellationToken cancellationToken);
 
+    public abstract void Attach(JobControl control);
     public abstract object? Output { get; }
 }
 

@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Oxbow.Internal;
 
 namespace Oxbow;
 
@@ -53,6 +55,44 @@ public sealed class JobRow
 
     /// <summary>Tags attached at insert.</summary>
     public required IReadOnlyList<string> Tags { get; init; }
+
+    /// <summary>
+    /// The last heartbeat (<c>oxbow:heartbeat_at</c> in <see cref="Metadata"/>), from any attempt: compare it with
+    /// <see cref="AttemptedAt"/>.
+    /// </summary>
+    public DateTimeOffset? HeartbeatAt =>
+        Metadata.ValueKind == JsonValueKind.Object
+        && Metadata.TryGetProperty("oxbow:heartbeat_at", out var value)
+        && value.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+            ? at
+            : null;
+
+    /// <summary>
+    /// The last progress reported (<c>oxbow:progress</c> in <see cref="Metadata"/>), from any attempt: compare its
+    /// <see cref="JobProgress.At"/> with <see cref="AttemptedAt"/>.
+    /// </summary>
+    public JobProgress? Progress
+    {
+        get
+        {
+            if (Metadata.ValueKind != JsonValueKind.Object
+                || !Metadata.TryGetProperty("oxbow:progress", out var value)
+                || value.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            try
+            {
+                return value.Deserialize(OxbowJsonContext.Default.JobProgress);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
 
     /// <summary>The largest output a job may record, in bytes of UTF-8 JSON (1 MiB).</summary>
     public const int MaxOutputSize = 1024 * 1024;

@@ -73,29 +73,32 @@ public sealed class WorkerHarness<TArgs, TWorker>(IServiceProvider services)
                 pipeline = context => current.InvokeAsync(context, next);
             }
 
+            WorkResult result;
             try
             {
                 await pipeline(new JobContext(row, args, scope.ServiceProvider, linked.Token)).ConfigureAwait(false);
-                return new WorkResult(WorkOutcome.Completed, null, null) { Output = SerializeOutput(job.Output, json) };
+                result = new WorkResult(WorkOutcome.Completed, null, null) { Output = SerializeOutput(job.Output, json) };
             }
             catch (JobSnoozeException ex)
             {
-                return new WorkResult(WorkOutcome.Snoozed, ex, ex.Duration);
+                result = new WorkResult(WorkOutcome.Snoozed, ex, ex.Duration);
             }
             catch (JobCancelException ex)
             {
-                return new WorkResult(WorkOutcome.Cancelled, ex, null);
+                result = new WorkResult(WorkOutcome.Cancelled, ex, null);
             }
             catch (OperationCanceledException ex) when (timeoutSource.IsCancellationRequested)
             {
-                return new WorkResult(WorkOutcome.TimedOut, ex, null);
+                result = new WorkResult(WorkOutcome.TimedOut, ex, null);
             }
 #pragma warning disable CA1031 // The harness reports every failure as a result.
             catch (Exception ex)
 #pragma warning restore CA1031
             {
-                return new WorkResult(WorkOutcome.Errored, ex, null);
+                result = new WorkResult(WorkOutcome.Errored, ex, null);
             }
+
+            return result with { Progress = job.Progress };
         }
     }
 
@@ -147,6 +150,9 @@ public enum WorkOutcome
 /// <param name="SnoozeDuration">The snooze duration, if snoozed.</param>
 public sealed record WorkResult(WorkOutcome Outcome, Exception? Exception, TimeSpan? SnoozeDuration)
 {
+    /// <summary>The progress the worker last reported, if any. Heartbeats are ignored.</summary>
+    public JobProgress? Progress { get; init; }
+
     /// <summary>
     /// The output the worker recorded with <see cref="Job{TArgs}.SetOutput"/>, as Oxbow would store it. Only set when
     /// <see cref="Outcome"/> is <see cref="WorkOutcome.Completed"/>.
