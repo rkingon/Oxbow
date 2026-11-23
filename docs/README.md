@@ -1,6 +1,7 @@
 # Oxbow docs
 
 - [Transactional enqueue](transactional-enqueue.md)
+- [Abstractions and layering](abstractions.md): own jobs in projects without Npgsql; enqueue in the unit of work
 - [Migrations](migrations.md) and [least privilege](least-privilege.md)
 - [Workers](workers.md): timeouts, snooze, self-cancel, error handling
 - [Retries](retries.md)

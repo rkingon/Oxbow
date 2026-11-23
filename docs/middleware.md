@@ -37,7 +37,12 @@ public sealed class StampTenant(ITenantAccessor tenants) : IJobInsertMiddleware
 services.AddOxbow(...).AddInsertMiddleware<StampTenant>();
 ```
 
-Insert middleware is a singleton and sees each batch once. It may change metadata, tags, queue and priority. The
+Insert middleware is a singleton by default. To depend on scoped services, register it with a lifetime:
+`AddInsertMiddleware<StampTenant>(ServiceLifetime.Scoped)`. It's then resolved from the inserting scope when inserting
+through the scoped `IOxbowClient` (see [abstractions](abstractions.md#scoped-insert-middleware)), and from a scope of
+its own otherwise, such as the leader's periodic runs.
+
+Insert middleware sees each batch once. It may change metadata, tags, queue and priority. The
 unique key is computed before middleware runs.
 
 Both kinds run in registration order, the first registered outermost.

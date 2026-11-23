@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Oxbow.Processing;
 
 namespace Oxbow;
 
@@ -20,6 +19,19 @@ public sealed class Job<TArgs>
         Row = row;
         Args = args;
     }
+
+    /// <summary>Creates a job whose heartbeat and progress calls go to <paramref name="runtime"/>.</summary>
+    /// <param name="row">The stored row.</param>
+    /// <param name="args">The deserialized args.</param>
+    /// <param name="runtime">Receives heartbeats and progress, e.g. a recording runtime in a unit test.</param>
+    public Job(JobRow row, TArgs args, IJobRuntime runtime)
+        : this(row, args)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        _runtime = runtime;
+    }
+
+    private readonly IJobRuntime? _runtime;
 
     /// <summary>The deserialized args.</summary>
     public TArgs Args { get; }
@@ -54,23 +66,20 @@ public sealed class Job<TArgs>
     /// </summary>
     public JobProgress? Progress { get; private set; }
 
-    /// <summary>Set by the executor; absent when the job is created directly, e.g. in a unit test.</summary>
-    internal JobControl? Control { get; set; }
-
     /// <summary>
     /// Records that the attempt is alive, under <c>oxbow:heartbeat_at</c> in metadata. Once an attempt heartbeats, the
     /// rescuer judges it by its last heartbeat instead of its start and timeout: it's rescued only after
-    /// <see cref="OxbowOptions.RescueStuckJobsAfter"/> without one. Calls are throttled, so call it as often as is
-    /// convenient. Does nothing outside Oxbow's executor, or once the attempt has ended.
+    /// <c>OxbowOptions.RescueStuckJobsAfter</c> without one. Calls are throttled, so call it as often as is
+    /// convenient. Does nothing without a runtime, or once the attempt has ended.
     /// </summary>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>A task that completes when the heartbeat is written or skipped.</returns>
     public Task HeartbeatAsync(CancellationToken cancellationToken = default) =>
-        Control?.HeartbeatAsync(cancellationToken) ?? Task.CompletedTask;
+        _runtime?.HeartbeatAsync(cancellationToken) ?? Task.CompletedTask;
 
     /// <summary>
     /// Records progress under <c>oxbow:progress</c> in metadata, readable through <see cref="IOxbowClient.GetAsync"/>.
-    /// Also counts as a heartbeat. Not throttled: every call is a write. Outside Oxbow's executor, only
+    /// Also counts as a heartbeat. Not throttled: every call is a write. Without a runtime, only
     /// <see cref="Progress"/> is updated.
     /// </summary>
     /// <param name="percent">How far along the work is, from 0 to 100.</param>
@@ -89,8 +98,8 @@ public sealed class Job<TArgs>
             throw new ArgumentException($"A progress message may be at most {MaxProgressMessageLength} characters.", nameof(message));
         }
 
-        Progress = new JobProgress(percent, message, Attempt, Control?.Now ?? DateTimeOffset.UtcNow);
-        return Control?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
+        Progress = new JobProgress(percent, message, Attempt, _runtime?.UtcNow ?? DateTimeOffset.UtcNow);
+        return _runtime?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
     }
 
     /// <summary>The batch this job is a member or callback of.</summary>

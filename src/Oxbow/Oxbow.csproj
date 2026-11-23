@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Oxbow.Abstractions\Oxbow.Abstractions.csproj" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Cronos" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />

@@ -33,6 +33,7 @@ public static class OxbowServiceCollectionExtensions
         services.TryAddSingleton<OxbowRuntime>();
         services.TryAddSingleton<WorkerRegistry>();
         services.TryAddSingleton<OxbowClient>();
+        services.TryAddSingleton<IOxbowNpgsqlClient>(sp => sp.GetRequiredService<OxbowClient>());
         services.TryAddSingleton<IOxbowClient>(sp => sp.GetRequiredService<OxbowClient>());
         services.AddHostedService<OxbowHostedService>();
         return new OxbowBuilder(services);
@@ -104,10 +105,48 @@ public static class OxbowBuilderExtensions
     /// <param name="builder">The builder.</param>
     /// <returns>The builder.</returns>
     public static IOxbowBuilder AddInsertMiddleware<TMiddleware>(this IOxbowBuilder builder)
+        where TMiddleware : class, IJobInsertMiddleware =>
+        builder.AddInsertMiddleware<TMiddleware>(ServiceLifetime.Singleton);
+
+    /// <summary>
+    /// Adds insert middleware with a lifetime. Scoped middleware is resolved from the inserting scope when inserting
+    /// through the scoped <see cref="IOxbowClient"/> (see <see cref="AddTransactionAccessor{TAccessor}"/>), and from a
+    /// scope of its own otherwise, e.g. for the leader's periodic runs. Middleware runs in registration order, outermost
+    /// first.
+    /// </summary>
+    /// <typeparam name="TMiddleware">The middleware.</typeparam>
+    /// <param name="builder">The builder.</param>
+    /// <param name="lifetime">The middleware's lifetime.</param>
+    /// <returns>The builder.</returns>
+    public static IOxbowBuilder AddInsertMiddleware<TMiddleware>(this IOxbowBuilder builder, ServiceLifetime lifetime)
         where TMiddleware : class, IJobInsertMiddleware
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Services.AddSingleton<IJobInsertMiddleware, TMiddleware>();
+        builder.Services.Add(new ServiceDescriptor(typeof(IJobInsertMiddleware), typeof(TMiddleware), lifetime));
+        if (lifetime != ServiceLifetime.Singleton)
+        {
+            builder.Services.TryAddSingleton<PerInsertMiddleware>();
+        }
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers a scoped <see cref="IOxbowTransactionAccessor"/>, and makes <see cref="IOxbowClient"/> scoped: its
+    /// inserts without a connection join the accessor's current transaction. Singletons and hosted services can't take a
+    /// scoped <see cref="IOxbowClient"/>; give them <see cref="IOxbowNpgsqlClient"/>, which stays a singleton and never
+    /// joins an ambient transaction, or a scope.
+    /// </summary>
+    /// <typeparam name="TAccessor">The accessor.</typeparam>
+    /// <param name="builder">The builder.</param>
+    /// <returns>The builder.</returns>
+    public static IOxbowBuilder AddTransactionAccessor<TAccessor>(this IOxbowBuilder builder)
+        where TAccessor : class, IOxbowTransactionAccessor
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.Services.Replace(ServiceDescriptor.Scoped<IOxbowTransactionAccessor, TAccessor>());
+        builder.Services.Replace(ServiceDescriptor.Scoped<IOxbowClient>(
+            sp => new ScopedOxbowClient(sp.GetRequiredService<OxbowClient>(), sp)));
         return builder;
     }
 }

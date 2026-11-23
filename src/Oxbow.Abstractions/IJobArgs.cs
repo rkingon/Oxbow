@@ -4,7 +4,7 @@ namespace Oxbow;
 /// Marks a type as the arguments of a job. Implementations must carry a <see cref="JobKindAttribute"/>.
 /// </summary>
 /// <remarks>
-/// Args are serialized with System.Text.Json using <see cref="OxbowOptions.JsonSerializerOptions"/>.
+/// Args are serialized with System.Text.Json using <c>OxbowOptions.JsonSerializerOptions</c>.
 /// </remarks>
 public interface IJobArgs
 {

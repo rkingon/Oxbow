@@ -51,7 +51,7 @@ public sealed class PeriodicJobRow
     public required DateTimeOffset UpdatedAt { get; init; }
 }
 
-/// <summary>Paging for <see cref="IOxbowClient.ListPeriodicJobsAsync"/>, ordered by name.</summary>
+/// <summary>Paging for <see cref="IOxbowNpgsqlClient.ListPeriodicJobsAsync"/>, ordered by name.</summary>
 public sealed record PeriodicJobListQuery
 {
     /// <summary>The page size, 1 to 10,000. Default 100.</summary>

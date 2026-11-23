@@ -1,1 +1,62 @@
 #nullable enable
+Oxbow.Testing.RecordedJob
+Oxbow.Testing.RecordedJob.<Clone>$() -> Oxbow.Testing.RecordedJob!
+Oxbow.Testing.RecordedJob.Args.get -> Oxbow.IJobArgs!
+Oxbow.Testing.RecordedJob.Args.init -> void
+Oxbow.Testing.RecordedJob.Deconstruct(out Oxbow.JobRow! Row, out Oxbow.IJobArgs! Args, out Oxbow.InsertOptions? Options) -> void
+Oxbow.Testing.RecordedJob.Equals(Oxbow.Testing.RecordedJob? other) -> bool
+Oxbow.Testing.RecordedJob.Kind.get -> string!
+Oxbow.Testing.RecordedJob.Options.get -> Oxbow.InsertOptions?
+Oxbow.Testing.RecordedJob.Options.init -> void
+Oxbow.Testing.RecordedJob.RecordedJob(Oxbow.JobRow! Row, Oxbow.IJobArgs! Args, Oxbow.InsertOptions? Options) -> void
+Oxbow.Testing.RecordedJob.Row.get -> Oxbow.JobRow!
+Oxbow.Testing.RecordedJob.Row.init -> void
+Oxbow.Testing.RecordedProgress
+Oxbow.Testing.RecordedProgress.<Clone>$() -> Oxbow.Testing.RecordedProgress!
+Oxbow.Testing.RecordedProgress.At.get -> System.DateTimeOffset
+Oxbow.Testing.RecordedProgress.At.init -> void
+Oxbow.Testing.RecordedProgress.Deconstruct(out double Percent, out string? Message, out System.DateTimeOffset At) -> void
+Oxbow.Testing.RecordedProgress.Equals(Oxbow.Testing.RecordedProgress? other) -> bool
+Oxbow.Testing.RecordedProgress.Message.get -> string?
+Oxbow.Testing.RecordedProgress.Message.init -> void
+Oxbow.Testing.RecordedProgress.Percent.get -> double
+Oxbow.Testing.RecordedProgress.Percent.init -> void
+Oxbow.Testing.RecordedProgress.RecordedProgress(double Percent, string? Message, System.DateTimeOffset At) -> void
+Oxbow.Testing.RecordingJobRuntime
+Oxbow.Testing.RecordingJobRuntime.HeartbeatAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.Testing.RecordingJobRuntime.Heartbeats.get -> int
+Oxbow.Testing.RecordingJobRuntime.Progress.get -> System.Collections.Generic.IReadOnlyList<Oxbow.Testing.RecordedProgress!>!
+Oxbow.Testing.RecordingJobRuntime.RecordingJobRuntime(System.TimeProvider? timeProvider = null) -> void
+Oxbow.Testing.RecordingJobRuntime.ReportProgressAsync(double percent, string? message, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.Testing.RecordingJobRuntime.UtcNow.get -> System.DateTimeOffset
+Oxbow.Testing.RecordingOxbowClient
+Oxbow.Testing.RecordingOxbowClient.CancelAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.Testing.RecordingOxbowClient.CancelManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.CancelManyResult!>!
+Oxbow.Testing.RecordingOxbowClient.Clear() -> void
+Oxbow.Testing.RecordingOxbowClient.DeleteAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.Testing.RecordingOxbowClient.DeleteManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
+Oxbow.Testing.RecordingOxbowClient.GetAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.Testing.RecordingOxbowClient.GetBatchAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Batch?>!
+Oxbow.Testing.RecordingOxbowClient.InsertAsync<TArgs>(TArgs args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.InsertResult!>!
+Oxbow.Testing.RecordingOxbowClient.InsertBatchAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, Oxbow.BatchOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.BatchInsertResult!>!
+Oxbow.Testing.RecordingOxbowClient.InsertManyAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!>!
+Oxbow.Testing.RecordingOxbowClient.InsertManyFastAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<int>!
+Oxbow.Testing.RecordingOxbowClient.Inserted<TArgs>() -> System.Collections.Generic.IReadOnlyList<Oxbow.Job<TArgs>!>!
+Oxbow.Testing.RecordingOxbowClient.Jobs.get -> System.Collections.Generic.IReadOnlyList<Oxbow.Testing.RecordedJob!>!
+Oxbow.Testing.RecordingOxbowClient.ListAsync(Oxbow.JobListQuery! query, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobListResult!>!
+Oxbow.Testing.RecordingOxbowClient.PauseQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Testing.RecordingOxbowClient.PausedQueues.get -> System.Collections.Generic.IReadOnlyCollection<string!>!
+Oxbow.Testing.RecordingOxbowClient.RecordingOxbowClient(System.Collections.Generic.IEnumerable<Oxbow.IJobInsertMiddleware!>? insertMiddleware = null, System.Text.Json.JsonSerializerOptions? jsonSerializerOptions = null, System.TimeProvider? timeProvider = null) -> void
+Oxbow.Testing.RecordingOxbowClient.ResumeQueueAsync(string! queue, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Testing.RecordingOxbowClient.RetryAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.JobRow?>!
+Oxbow.Testing.RecordingOxbowClient.RetryManyAsync(Oxbow.JobFilter! filter, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.RetryManyResult!>!
+override Oxbow.Testing.RecordedJob.Equals(object? obj) -> bool
+override Oxbow.Testing.RecordedJob.GetHashCode() -> int
+override Oxbow.Testing.RecordedJob.ToString() -> string!
+override Oxbow.Testing.RecordedProgress.Equals(object? obj) -> bool
+override Oxbow.Testing.RecordedProgress.GetHashCode() -> int
+override Oxbow.Testing.RecordedProgress.ToString() -> string!
+static Oxbow.Testing.RecordedJob.operator !=(Oxbow.Testing.RecordedJob? left, Oxbow.Testing.RecordedJob? right) -> bool
+static Oxbow.Testing.RecordedJob.operator ==(Oxbow.Testing.RecordedJob? left, Oxbow.Testing.RecordedJob? right) -> bool
+static Oxbow.Testing.RecordedProgress.operator !=(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
+static Oxbow.Testing.RecordedProgress.operator ==(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool

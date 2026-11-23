@@ -14,6 +14,15 @@ await transaction.CommitAsync();
 
 Without a current transaction, `InsertAsync(db, …)` throws rather than committing the job on its own.
 
+## Join the scoped context's transaction without passing it
+
+```csharp
+services.AddOxbow(o => o.RequireAmbientTransaction = true).AddDbContextTransaction<AppDbContext>();
+```
+
+`IOxbowClient` becomes scoped, and `InsertAsync(args)` inserts in the scope's `AppDbContext` transaction, so code that
+references only `Oxbow.Abstractions` enqueues transactionally.
+
 ## Add the schema to your migrations
 
 ```csharp

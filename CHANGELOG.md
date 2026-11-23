@@ -3,6 +3,33 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `Oxbow.Abstractions`: job args, workers, `IOxbowClient` and the read models in a package with no dependencies beyond
+  the BCL, so domain and application projects can own their jobs without Npgsql. The types keep the `Oxbow`
+  namespace, and `Oxbow` depends on the package and forwards them. See [docs/abstractions.md](docs/abstractions.md).
+- Ambient transaction enlistment: register an `IOxbowTransactionAccessor` with `AddTransactionAccessor<T>()`, or
+  `AddDbContextTransaction<TContext>()` from `Oxbow.EntityFrameworkCore`. `IOxbowClient` then becomes scoped, and its
+  `InsertAsync`, `InsertManyAsync`, `InsertManyFastAsync` and `InsertBatchAsync` insert in the accessor's current
+  transaction. `OxbowOptions.RequireAmbientTransaction` makes those inserts throw when there's no current transaction.
+- `AddInsertMiddleware<T>(ServiceLifetime)`: scoped insert middleware, resolved from the inserting scope through the
+  scoped client, or from a scope of its own otherwise.
+- `IJobRuntime`, behind `Job<TArgs>.HeartbeatAsync` and `ReportProgressAsync`, with a `Job<TArgs>` constructor that
+  takes one. `Oxbow.Testing` adds `RecordingJobRuntime`.
+- `RecordingOxbowClient` in `Oxbow.Testing`: an in-memory `IOxbowClient` for unit testing code that enqueues. It runs
+  insert middleware and records each job's kind, args, options and metadata.
+- `JobInsertContext` and `JobInsertParams` have public constructors, for unit testing insert middleware.
+
+### Changed
+
+- **Breaking:** `IOxbowNpgsqlClient : IOxbowClient` in `Oxbow` now holds the members that need Npgsql or the runtime:
+  the overloads taking an `NpgsqlConnection` and `NpgsqlTransaction`, and periodic-job management. Extension methods
+  on `IOxbowClient` keep existing calls compiling. Code that implements or mocks `IOxbowClient` and set up those
+  members must target `IOxbowNpgsqlClient` instead, and assemblies compiled against them need recompiling.
+  `AddOxbow` registers both interfaces.
+
 ## [0.2.0-alpha.1] - 2026-11-23
 
 Schema version 2 and the core roadmap. **Upgrade the schema before deploying**: see the first item under Changed.

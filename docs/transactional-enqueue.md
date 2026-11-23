@@ -44,3 +44,22 @@ await transaction.CommitAsync();
 `InsertAsync(db, …)` throws `InvalidOperationException` when the context has no current transaction, because the job
 would otherwise commit on its own, ahead of `SaveChanges`. To commit a job immediately, use `IOxbowClient.InsertAsync`
 without a `DbContext`.
+
+## Ambient transaction
+
+To enqueue without passing a connection or context, for example from an application layer that references only
+`Oxbow.Abstractions`, register a transaction accessor. The scoped `IOxbowClient` then inserts in its current
+transaction:
+
+```csharp
+services.AddOxbow(o => o.RequireAmbientTransaction = true).AddDbContextTransaction<AppDbContext>();
+
+await using var transaction = await db.Database.BeginTransactionAsync();
+db.Orders.Add(order);
+await db.SaveChangesAsync();
+await oxbow.InsertAsync(new ChargeOrder(order.Id)); // in db's transaction
+await transaction.CommitAsync();
+```
+
+`RequireAmbientTransaction` makes an insert with no current transaction throw instead of committing on its own. See
+[abstractions](abstractions.md) for what the scoped client changes.

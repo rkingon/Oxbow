@@ -87,6 +87,13 @@ public sealed class OxbowOptions
     /// </summary>
     public bool EncryptAllArgs { get; set; }
 
+    /// <summary>
+    /// Make <c>InsertAsync</c>, <c>InsertManyAsync</c>, <c>InsertManyFastAsync</c> and <c>InsertBatchAsync</c> without a
+    /// connection throw when there's no ambient transaction, instead of committing on a transaction of their own. Needs an
+    /// <see cref="IOxbowTransactionAccessor"/>. Inserts given a connection, and Oxbow's own periodic runs, aren't affected.
+    /// </summary>
+    public bool RequireAmbientTransaction { get; set; }
+
     /// <summary>This node's ID, recorded in <see cref="JobRow.AttemptedBy"/>. Default: host name plus a random suffix.</summary>
     public string? ClientId { get; set; }
 

@@ -14,7 +14,7 @@ public interface IWorker<TArgs>
     /// <returns>A task that completes when the work is done.</returns>
     Task WorkAsync(Job<TArgs> job, CancellationToken cancellationToken);
 
-    /// <summary>The timeout for this job, overriding <see cref="OxbowOptions.JobTimeout"/>.</summary>
+    /// <summary>The timeout for this job, overriding <c>OxbowOptions.JobTimeout</c>.</summary>
     /// <param name="job">The job.</param>
     /// <returns>The timeout, <see cref="Timeout.InfiniteTimeSpan"/> for none, or <see langword="null"/> for the default.</returns>
     TimeSpan? GetTimeout(Job<TArgs> job) => null;

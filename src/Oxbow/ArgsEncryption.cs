@@ -4,13 +4,6 @@ using Oxbow.Internal;
 namespace Oxbow;
 
 /// <summary>
-/// Encrypts this kind's args at rest. Needs an <see cref="IJobArgsProtector"/>, e.g. <c>AddArgsEncryption()</c> from
-/// <c>Oxbow.DataProtection</c>. <see cref="OxbowOptions.EncryptAllArgs"/> encrypts every kind.
-/// </summary>
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
-public sealed class EncryptArgsAttribute : Attribute;
-
-/// <summary>
 /// Encrypts and decrypts job args, and keys the unique-key hash of encrypted kinds. Register one as a singleton.
 /// <c>Oxbow.DataProtection</c> implements it on ASP.NET Core Data Protection.
 /// </summary>
