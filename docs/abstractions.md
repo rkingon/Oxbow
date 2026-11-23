@@ -16,7 +16,9 @@ Domain and application projects reference it to own their jobs, and only the hos
 - Inserting: `IOxbowClient`, `InsertOptions`, `UniqueOptions`, `InsertManyItem`, `InsertResult`, `BatchOptions`
 - Reading: `JobRow`, `JobState`, `JobFilter`, `JobListQuery`, `Batch`
 
-The types keep the `Oxbow` namespace, and `Oxbow` forwards them, so code that references `Oxbow` is unaffected.
+The types keep the `Oxbow` namespace, and `Oxbow` forwards them, so code that references `Oxbow` compiles unchanged.
+Code that implements or mocks `IOxbowClient`, and assemblies compiled against 0.2.0-alpha.1 that call its connection or
+periodic-job members, need updating or recompiling: those members moved to `IOxbowNpgsqlClient`.
 
 `IOxbowClient` has every member that needs neither Npgsql nor the runtime: inserts, reads, cancel/retry/delete and their
 bulk forms, and queue pause/resume. The rest is on `IOxbowNpgsqlClient : IOxbowClient` in `Oxbow`: inserts on your

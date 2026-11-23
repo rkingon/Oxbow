@@ -90,6 +90,35 @@ public sealed class AmbientTransactionTests(PostgresFixture database)
     }
 
     [Fact]
+    public async Task Concurrent_scopes_insert_in_their_own_transactions_with_their_own_tenants()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix);
+
+        async Task<long> PlaceAsync(string tenant, long orderId, bool commit)
+        {
+            await using var scope = app.Host.Services.CreateAsyncScope();
+            scope.ServiceProvider.GetRequiredService<TenantContext>().Tenant = tenant;
+            var db = scope.ServiceProvider.GetRequiredService<ShopContext>();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var jobId = await scope.ServiceProvider.GetRequiredService<PlaceOrder>().ExecuteAsync(orderId);
+            await Task.Delay(100);
+            if (commit)
+            {
+                await transaction.CommitAsync();
+            }
+
+            return jobId;
+        }
+
+        var ids = await Task.WhenAll(PlaceAsync("acme", 10, commit: true), PlaceAsync("globex", 11, commit: false));
+
+        var committed = await app.WaitForStateAsync(ids[0], JobState.Completed);
+        Assert.Equal("acme", committed.Metadata.GetProperty("tenant").GetString());
+        Assert.Null(await app.Client.GetAsync(ids[1]));
+    }
+
+    [Fact]
     public async Task Every_ambient_insert_joins_the_transaction()
     {
         var prefix = await database.CreateSchemaAsync();

@@ -9,7 +9,10 @@ namespace Oxbow;
 [SuppressMessage("Naming", "CA1711", Justification = "Mirrors ASP.NET Core's RequestDelegate.")]
 public delegate Task<IReadOnlyList<InsertResult>> JobInsertDelegate(JobInsertContext context);
 
-/// <summary>Wraps every insert, single or bulk. Resolved from the root DI container.</summary>
+/// <summary>
+/// Wraps every insert, single or bulk. A singleton by default; see <c>AddInsertMiddleware&lt;T&gt;(ServiceLifetime)</c>
+/// for scoped middleware.
+/// </summary>
 public interface IJobInsertMiddleware
 {
     /// <summary>Runs around the rest of the pipeline. Call <paramref name="next"/> to continue.</summary>

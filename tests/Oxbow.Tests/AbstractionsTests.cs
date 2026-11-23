@@ -132,6 +132,35 @@ public sealed class AbstractionsTests
         Assert.Null(page.NextCursor);
     }
 
+    private sealed class CountResults(List<int> counts) : IJobInsertMiddleware
+    {
+        public async Task<IReadOnlyList<InsertResult>> InvokeAsync(JobInsertContext context, JobInsertDelegate next)
+        {
+            var results = await next(context);
+            counts.Add(results.Count);
+            return results;
+        }
+    }
+
+    [Fact]
+    public async Task The_recording_client_matches_Oxbow_at_the_edges()
+    {
+        var counts = new List<int>();
+        var oxbow = new RecordingOxbowClient([new CountResults(counts)]);
+
+        Assert.Equal(2, await oxbow.InsertManyFastAsync([new InsertManyItem(new ShipOrder(1)), new InsertManyItem(new ShipOrder(2))]));
+        Assert.Equal([0], counts);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => oxbow.DeleteManyAsync(new JobFilter { Tags = [] }));
+        await Assert.ThrowsAsync<ArgumentException>(() => oxbow.CancelManyAsync(new JobFilter { Metadata = [] }));
+
+        var callbacks = new BatchOptions { OnSuccess = new BatchCallback(new ShipOrder(9)) };
+        var batch = await oxbow.InsertBatchAsync([new InsertManyItem(new ShipOrder(3))], callbacks);
+        var recorded = Assert.Single(oxbow.Batches);
+        Assert.Equal((batch.BatchId, callbacks), (recorded.Id, recorded.Options));
+        Assert.Equal([batch.Jobs[0].Job.Id], recorded.JobIds);
+    }
+
     [Fact]
     public async Task The_recording_client_pages_like_Oxbow()
     {

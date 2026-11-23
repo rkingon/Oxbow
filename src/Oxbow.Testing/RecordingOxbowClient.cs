@@ -9,7 +9,8 @@ namespace Oxbow.Testing;
 /// <summary>
 /// An in-memory <see cref="IOxbowClient"/> that records inserts, so code that enqueues can be unit tested without a
 /// database. Inserts run the given insert middleware and are stored as Oxbow would store them; reads and job management
-/// act on what's stored. Nothing is worked, there are no transactions, and unique keys, sequence ordering, and keys
+/// act on what's stored. Batch callbacks are recorded in <see cref="Batches"/>, not enqueued. Nothing is worked, there
+/// are no transactions, and unique keys, sequence ordering, and keys
 /// derived from <see cref="UniqueKeyAttribute"/>, <see cref="PartitionKeyAttribute"/> and
 /// <see cref="SequenceKeyAttribute"/> aren't applied.
 /// </summary>
@@ -18,7 +19,7 @@ public sealed class RecordingOxbowClient : IOxbowClient
     private const int DefaultMaxAttempts = 25;
 
     private readonly List<RecordedJob> _jobs = [];
-    private readonly Dictionary<long, (DateTimeOffset CreatedAt, int Total)> _batches = [];
+    private readonly Dictionary<long, RecordedBatch> _batches = [];
     private readonly HashSet<string> _pausedQueues = new(StringComparer.Ordinal);
     private readonly IJobInsertMiddleware[] _insertMiddleware;
     private readonly JsonSerializerOptions _json;
@@ -51,6 +52,21 @@ public sealed class RecordingOxbowClient : IOxbowClient
             lock (_jobs)
             {
                 return [.. _jobs];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every batch inserted, in insert order, with the callbacks it was given. Callbacks are recorded as passed: they
+    /// don't go through insert middleware here, and are never enqueued.
+    /// </summary>
+    public IReadOnlyList<RecordedBatch> Batches
+    {
+        get
+        {
+            lock (_jobs)
+            {
+                return [.. _batches.Values.OrderBy(b => b.Id)];
             }
         }
     }
@@ -109,8 +125,14 @@ public sealed class RecordingOxbowClient : IOxbowClient
                 nameof(items));
         }
 
-        var results = await InsertCoreAsync(jobs, batchId: null, cancellationToken).ConfigureAwait(false);
-        return results.Count;
+        var count = 0;
+        await InsertCoreAsync(jobs, batchId: null, cancellationToken, recorded =>
+        {
+            // As Oxbow's COPY path: middleware sees an empty result list, and the count is tracked separately.
+            count = recorded.Count;
+            return [];
+        }).ConfigureAwait(false);
+        return count;
     }
 
     /// <inheritdoc/>
@@ -124,7 +146,7 @@ public sealed class RecordingOxbowClient : IOxbowClient
         var results = await InsertCoreAsync(jobs, batchId, cancellationToken).ConfigureAwait(false);
         lock (_jobs)
         {
-            _batches[batchId] = (_timeProvider.GetUtcNow(), results.Count);
+            _batches[batchId] = new RecordedBatch(batchId, _timeProvider.GetUtcNow(), [.. results.Select(r => r.Job.Id)], options);
         }
 
         return new BatchInsertResult(batchId, results);
@@ -145,10 +167,10 @@ public sealed class RecordingOxbowClient : IOxbowClient
             {
                 Id = id,
                 CreatedAt = batch.CreatedAt,
-                Total = batch.Total,
+                Total = batch.JobIds.Count,
                 Completed = members.Count(s => s == JobState.Completed),
                 Discarded = members.Count(s => s == JobState.Discarded),
-                Cancelled = members.Count(s => s == JobState.Cancelled) + batch.Total - members.Count,
+                Cancelled = members.Count(s => s == JobState.Cancelled) + batch.JobIds.Count - members.Count,
             });
         }
     }
@@ -311,7 +333,11 @@ public sealed class RecordingOxbowClient : IOxbowClient
         PartitionKey = options?.PartitionKey ?? defaults?.PartitionKey,
     };
 
-    private async Task<IReadOnlyList<InsertResult>> InsertCoreAsync(List<PreparedJob> jobs, long? batchId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<InsertResult>> InsertCoreAsync(
+        List<PreparedJob> jobs,
+        long? batchId,
+        CancellationToken cancellationToken,
+        Func<List<InsertResult>, IReadOnlyList<InsertResult>>? toMiddleware = null)
     {
         if (jobs.Count == 0)
         {
@@ -327,7 +353,11 @@ public sealed class RecordingOxbowClient : IOxbowClient
         }
 
         var byParams = jobs.ToDictionary(j => j.Params);
-        JobInsertDelegate pipeline = context => Task.FromResult<IReadOnlyList<InsertResult>>(Record(context.Jobs, byParams));
+        JobInsertDelegate pipeline = context =>
+        {
+            var recorded = Record(context.Jobs, byParams);
+            return Task.FromResult(toMiddleware is null ? recorded : toMiddleware(recorded));
+        };
         for (var i = _insertMiddleware.Length - 1; i >= 0; i--)
         {
             var middleware = _insertMiddleware[i];
@@ -452,7 +482,8 @@ public sealed class RecordingOxbowClient : IOxbowClient
         }
 
         if (!filter.All && filter.States is null && filter.Queues is null && filter.Kinds is null && filter.BatchId is null
-            && filter.SequenceKey is null && filter.PartitionKey is null && filter.Metadata is null && filter.Tags is null)
+            && filter.SequenceKey is null && filter.PartitionKey is null && (filter.Metadata is null || filter.Metadata.Count == 0)
+            && (filter.Tags is null || filter.Tags.Count == 0))
         {
             throw new ArgumentException("The filter matches every job. Set JobFilter.All to confirm.", nameof(filter));
         }
@@ -491,3 +522,10 @@ public sealed record RecordedJob(JobRow Row, IJobArgs Args, InsertOptions? Optio
     /// <summary>The job kind.</summary>
     public string Kind => Row.Kind;
 }
+
+/// <summary>A batch stored by <see cref="RecordingOxbowClient"/>.</summary>
+/// <param name="Id">The batch's ID.</param>
+/// <param name="CreatedAt">When it was inserted.</param>
+/// <param name="JobIds">Its member jobs.</param>
+/// <param name="Options">The callbacks it was given.</param>
+public sealed record RecordedBatch(long Id, DateTimeOffset CreatedAt, IReadOnlyList<long> JobIds, BatchOptions? Options);

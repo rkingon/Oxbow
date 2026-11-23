@@ -60,3 +60,22 @@ static Oxbow.Testing.RecordedJob.operator !=(Oxbow.Testing.RecordedJob? left, Ox
 static Oxbow.Testing.RecordedJob.operator ==(Oxbow.Testing.RecordedJob? left, Oxbow.Testing.RecordedJob? right) -> bool
 static Oxbow.Testing.RecordedProgress.operator !=(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
 static Oxbow.Testing.RecordedProgress.operator ==(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
+Oxbow.Testing.RecordedBatch
+Oxbow.Testing.RecordedBatch.<Clone>$() -> Oxbow.Testing.RecordedBatch!
+Oxbow.Testing.RecordedBatch.CreatedAt.get -> System.DateTimeOffset
+Oxbow.Testing.RecordedBatch.CreatedAt.init -> void
+Oxbow.Testing.RecordedBatch.Deconstruct(out long Id, out System.DateTimeOffset CreatedAt, out System.Collections.Generic.IReadOnlyList<long>! JobIds, out Oxbow.BatchOptions? Options) -> void
+Oxbow.Testing.RecordedBatch.Equals(Oxbow.Testing.RecordedBatch? other) -> bool
+Oxbow.Testing.RecordedBatch.Id.get -> long
+Oxbow.Testing.RecordedBatch.Id.init -> void
+Oxbow.Testing.RecordedBatch.JobIds.get -> System.Collections.Generic.IReadOnlyList<long>!
+Oxbow.Testing.RecordedBatch.JobIds.init -> void
+Oxbow.Testing.RecordedBatch.Options.get -> Oxbow.BatchOptions?
+Oxbow.Testing.RecordedBatch.Options.init -> void
+Oxbow.Testing.RecordedBatch.RecordedBatch(long Id, System.DateTimeOffset CreatedAt, System.Collections.Generic.IReadOnlyList<long>! JobIds, Oxbow.BatchOptions? Options) -> void
+Oxbow.Testing.RecordingOxbowClient.Batches.get -> System.Collections.Generic.IReadOnlyList<Oxbow.Testing.RecordedBatch!>!
+override Oxbow.Testing.RecordedBatch.Equals(object? obj) -> bool
+override Oxbow.Testing.RecordedBatch.GetHashCode() -> int
+override Oxbow.Testing.RecordedBatch.ToString() -> string!
+static Oxbow.Testing.RecordedBatch.operator !=(Oxbow.Testing.RecordedBatch? left, Oxbow.Testing.RecordedBatch? right) -> bool
+static Oxbow.Testing.RecordedBatch.operator ==(Oxbow.Testing.RecordedBatch? left, Oxbow.Testing.RecordedBatch? right) -> bool
