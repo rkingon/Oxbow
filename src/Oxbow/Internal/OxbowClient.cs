@@ -807,6 +807,7 @@ internal sealed partial class OxbowClient(
         while (true)
         {
             var batch = await ManyBatchAsync(template, filter, after, until, cancellationToken).ConfigureAwait(false);
+            await SequencePromoter.PromoteAsync(runtime, batch.FreedSequences, cancellationToken).ConfigureAwait(false);
             affected += batch.Affected;
             other += batch.Other;
             if (batch.Scanned < BulkBatchSize)
@@ -818,7 +819,7 @@ internal sealed partial class OxbowClient(
         }
     }
 
-    private async Task<(long Scanned, long LastId, long Affected, long Other)> ManyBatchAsync(
+    private async Task<(long Scanned, long LastId, long Affected, long Other, string[] FreedSequences)> ManyBatchAsync(
         string template,
         JobFilter filter,
         long after,
@@ -844,15 +845,12 @@ internal sealed partial class OxbowClient(
                     await using (reader.ConfigureAwait(false))
                     {
                         await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-                        var result = (
+                        return (
                             reader.GetInt64(0),
                             reader.IsDBNull(1) ? after : reader.GetInt64(1),
                             reader.GetInt64(2),
-                            reader.GetInt64(3));
-                        var freedSequences = reader.IsDBNull(4) ? [] : reader.GetFieldValue<string[]>(4);
-                        await reader.DisposeAsync().ConfigureAwait(false);
-                        await SequencePromoter.PromoteAsync(runtime, freedSequences, cancellationToken).ConfigureAwait(false);
-                        return result;
+                            reader.GetInt64(3),
+                            reader.IsDBNull(4) ? [] : reader.GetFieldValue<string[]>(4));
                     }
                 }
 
