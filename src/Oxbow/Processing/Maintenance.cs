@@ -48,6 +48,7 @@ internal sealed class Maintenance(
         {
             var command = runtime.DataSource.CreateCommand(runtime.Sql.Schedule);
             var queues = new HashSet<string>(StringComparer.Ordinal);
+            var discarded = new List<long>();
             var count = 0;
             await using (command.ConfigureAwait(false))
             {
@@ -64,11 +65,17 @@ internal sealed class Maintenance(
                                 queues.Add(reader.GetString(0));
                                 break;
                             case "discarded":
-                                discardHooks.Enqueue(new Discard(reader.GetInt64(2), JobDiscardReason.UniqueKeyConflict));
+                                discarded.Add(reader.GetInt64(2));
                                 break;
                         }
                     }
                 }
+            }
+
+            // Only once the reader is disposed is the statement committed; handlers must not read it earlier.
+            foreach (var id in discarded)
+            {
+                discardHooks.Enqueue(new Discard(id, JobDiscardReason.UniqueKeyConflict));
             }
 
             if (queues.Count > 0)

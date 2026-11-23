@@ -58,10 +58,14 @@ var result = job?.GetOutput<ResizeResult>(jsonOptions);  // or job.Output, the r
   which matches Oxbow's default).
 - Only recorded on completion. If the attempt fails, snoozes or is cancelled, the output is dropped, as in River.
   `SetOutput` again replaces it.
-- At most `JobRow.MaxOutputSize` (1 MiB) of JSON. A larger output, or one that can't be serialized, fails the attempt
-  with an `InvalidOperationException` in `errors`, and the job is retried like any other failure. Store large results
-  elsewhere and record a reference: the output lives in the job row, and `metadata` has a GIN index.
+- At most `JobRow.MaxOutputSize` (1 MiB) of JSON. A larger output fails the attempt with an `InvalidOperationException`
+  in `errors`, and one that can't be serialized fails it with the serializer's exception; either way the job is retried
+  like any other failure. Store large results elsewhere and record a reference: the output lives in the job row, and
+  `metadata` has a GIN index.
 - A retried job (`RetryAsync`) keeps its previous output until it completes again.
+- As in River, the output is merged into the row even if the job is no longer running by the time the completion is
+  written (the rescuer took it after its timeout and it was retried, discarded or cancelled). The state isn't changed,
+  but the late output replaces any output already there.
 
 ## Timeouts
 

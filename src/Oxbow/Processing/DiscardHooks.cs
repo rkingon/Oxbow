@@ -124,10 +124,15 @@ internal sealed class DiscardHooks(
         }
     }
 
+    // Handlers' cancellation callbacks run on the thread pool, so one that blocks or throws can't stall shutdown.
     public void Cancel()
     {
         _queue.Writer.TryComplete();
-        _stop.Cancel();
+        _ = _stop.CancelAsync().ContinueWith(
+            t => Log.DiscardCancelCallbackFailed(logger, t.Exception!),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task ObserveAsync(Task<JobState?> written, long id, JobState requested, Exception? exception)

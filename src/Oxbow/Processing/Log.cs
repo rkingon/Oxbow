@@ -61,4 +61,7 @@ internal static partial class Log
 
     [LoggerMessage(72, LogLevel.Error, "Reading {Count} discarded jobs for their handlers failed; those calls are dropped.")]
     public static partial void DiscardReadFailed(ILogger logger, Exception exception, int count);
+
+    [LoggerMessage(73, LogLevel.Warning, "A discard handler's cancellation callback threw.")]
+    public static partial void DiscardCancelCallbackFailed(ILogger logger, Exception exception);
 }

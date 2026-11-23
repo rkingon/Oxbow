@@ -66,6 +66,10 @@ public sealed class OutputAndDiscardTests
         Assert.Equal(new SumResult(6), with.GetOutput<SumResult>());
         Assert.Null(without.Output);
         Assert.Null(without.GetOutput<SumResult>());
+
+        var custom = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        Assert.Equal(new SumResult(6), with.GetOutput<SumResult>(custom));
+        Assert.False(custom.IsReadOnly);
     }
 
     [Theory]

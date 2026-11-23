@@ -68,8 +68,21 @@ public sealed class JobRow
     /// <see cref="JsonSerializerOptions.Web"/>.
     /// </param>
     /// <returns>The output, or <see langword="default"/> if none was recorded.</returns>
-    public T? GetOutput<T>(JsonSerializerOptions? options = null) =>
-        Output is { } output
-            ? output.Deserialize((JsonTypeInfo<T>)(options ?? JsonSerializerOptions.Web).GetTypeInfo(typeof(T)))
-            : default;
+    public T? GetOutput<T>(JsonSerializerOptions? options = null)
+    {
+        if (Output is not { } output)
+        {
+            return default;
+        }
+
+        options ??= JsonSerializerOptions.Web;
+        if (!options.IsReadOnly)
+        {
+            // As the client does: leave the caller's options mutable, and fill in a missing resolver.
+            options = new JsonSerializerOptions(options);
+            options.TypeInfoResolver ??= new DefaultJsonTypeInfoResolver();
+        }
+
+        return output.Deserialize((JsonTypeInfo<T>)options.GetTypeInfo(typeof(T)));
+    }
 }
