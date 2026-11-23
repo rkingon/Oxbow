@@ -29,8 +29,9 @@ public sealed class SchemaTests(PostgresFixture database)
     }
 
     [Fact]
-    public async Task Each_version_upgrades_from_the_previous_one_and_back()
+    public async Task Each_version_upgrades_from_the_previous_one_with_its_grants_and_back()
     {
+        // Replays migrations the way a consumer's history does: each version's scripts and grants, in order.
         const string prefix = "upgrade_";
         for (var version = 1; version <= OxbowSchema.LatestVersion; version++)
         {
@@ -39,7 +40,13 @@ public sealed class SchemaTests(PostgresFixture database)
                 await database.ExecuteAsOwnerAsync(migration.Sql);
             }
 
-            Assert.Equal(version, await database.ScalarAsOwnerAsync<int>($"SELECT max(version) FROM public.{prefix}migration"));
+            var grants = OxbowSchema.GetGrants(PostgresFixture.AppRole, version, tablePrefix: prefix);
+            if (!string.IsNullOrWhiteSpace(grants))
+            {
+                await database.ExecuteSerializedAsOwnerAsync(grants);
+            }
+
+            Assert.Equal(version, await MarkerAsync(prefix));
         }
 
         for (var version = OxbowSchema.LatestVersion; version >= 1; version--)
@@ -48,10 +55,39 @@ public sealed class SchemaTests(PostgresFixture database)
             {
                 await database.ExecuteAsOwnerAsync(migration.Sql);
             }
+
+            Assert.Equal(version - 1, await MarkerAsync(prefix));
         }
 
         Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM pg_class WHERE relname LIKE '{prefix}%'"));
     }
+
+    [Fact]
+    public async Task Start_on_an_older_schema_names_the_upgrade()
+    {
+        const string prefix = "older_";
+        foreach (var migration in OxbowSchema.GetMigrations(0, OxbowSchema.LatestVersion - 1, tablePrefix: prefix))
+        {
+            await database.ExecuteAsOwnerAsync(migration.Sql);
+        }
+
+        for (var version = 1; version < OxbowSchema.LatestVersion; version++)
+        {
+            await database.ExecuteSerializedAsOwnerAsync(OxbowSchema.GetGrants(PostgresFixture.AppRole, version, tablePrefix: prefix));
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            TestApp.StartAsync(database, prefix, register: b => b.AddWorker<RecordArgs, RecordWorker>()));
+        Assert.Contains(
+            $"OxbowSchema.GetMigrations({OxbowSchema.LatestVersion - 1}, {OxbowSchema.LatestVersion})",
+            ex.Message,
+            StringComparison.Ordinal);
+    }
+
+    private async Task<int> MarkerAsync(string prefix) =>
+        await database.ScalarAsOwnerAsync<bool>($"SELECT to_regclass('public.{prefix}migration') IS NOT NULL")
+            ? await database.ScalarAsOwnerAsync<int>($"SELECT coalesce(max(version), 0) FROM public.{prefix}migration")
+            : 0;
 
     [Fact]
     public async Task Every_created_object_carries_the_prefix()

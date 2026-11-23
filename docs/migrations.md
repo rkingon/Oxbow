@@ -21,20 +21,37 @@ foreach (var migration in OxbowSchema.GetMigrations(fromVersion: 0, toVersion: O
 
 ## EF Core
 
-One EF migration per Oxbow schema version:
+One EF migration per Oxbow schema version, each granting what that version adds:
 
 ```csharp
-protected override void Up(MigrationBuilder migrationBuilder)
+public partial class AddOxbow : Migration
 {
-    migrationBuilder.AddOxbowSchema(version: 2);
-    migrationBuilder.GrantOxbowAccess("app_role");
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AddOxbowSchema(version: 1);
+        migrationBuilder.GrantOxbowAccess("app_role", version: 1);
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.RemoveOxbowSchema(version: 1);
 }
 
-protected override void Down(MigrationBuilder migrationBuilder) => migrationBuilder.RemoveOxbowSchema(version: 2);
+public partial class UpgradeOxbowToV2 : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AddOxbowSchema(version: 2);
+        migrationBuilder.GrantOxbowAccess("app_role", version: 2);
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.RemoveOxbowSchema(version: 2);
+}
 ```
 
-Upgrading from 1 to 2 is a new EF migration with `AddOxbowSchema(version: 2)` and `GrantOxbowAccess` again, since
-version 2 adds objects the runtime role needs.
+Versions are required rather than defaulting to the latest, so an old migration replays the same SQL after you upgrade
+the package. For the same reason, `GrantOxbowAccess(role, version)` grants only the objects that version adds;
+`OxbowSchema.GetGrants(role)` (no version) is the full set for the latest schema, for plain SQL setups.
 
 ## CLI
 

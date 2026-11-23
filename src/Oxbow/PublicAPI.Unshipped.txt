@@ -3,3 +3,4 @@
 *REMOVED*static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 1, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
 const Oxbow.OxbowSchema.LatestVersion = 2 -> int
 static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
+static Oxbow.OxbowSchema.GetGrants(string! role, int version, string! schema = "public", string! tablePrefix = "oxbow_") -> string!

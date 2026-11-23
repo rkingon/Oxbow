@@ -22,10 +22,25 @@ public partial class AddOxbow : Migration
     protected override void Up(MigrationBuilder migrationBuilder)
     {
         migrationBuilder.AddOxbowSchema(version: 1);
-        migrationBuilder.GrantOxbowAccess("app_role");
+        migrationBuilder.GrantOxbowAccess("app_role", version: 1);
     }
 
     protected override void Down(MigrationBuilder migrationBuilder) =>
         migrationBuilder.RemoveOxbowSchema(version: 1);
 }
+
+public partial class UpgradeOxbowToV2 : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.AddOxbowSchema(version: 2);
+        migrationBuilder.GrantOxbowAccess("app_role", version: 2);
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.RemoveOxbowSchema(version: 2);
+}
 ```
+
+One EF migration per Oxbow schema version, each with that version's grants. Versions are always explicit, so a
+migration replays the same SQL after you upgrade the package.

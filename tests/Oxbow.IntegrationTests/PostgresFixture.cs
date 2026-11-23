@@ -77,6 +77,20 @@ public sealed class PostgresFixture : IAsyncLifetime
         return prefix;
     }
 
+    /// <summary>Runs DDL that touches shared catalog rows (schema grants), one statement batch at a time.</summary>
+    public async Task ExecuteSerializedAsOwnerAsync(string sql)
+    {
+        await _ddl.WaitAsync();
+        try
+        {
+            await ExecuteAsOwnerAsync(sql);
+        }
+        finally
+        {
+            _ddl.Release();
+        }
+    }
+
     public async Task ExecuteAsOwnerAsync(string sql)
     {
         await using var connection = new NpgsqlConnection(OwnerConnectionString);
