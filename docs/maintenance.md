@@ -10,7 +10,7 @@ The leader runs:
 | Service | Every | Does |
 |---|---|---|
 | Scheduler | `SchedulerInterval` (5 s) | Makes due `scheduled` and `retryable` jobs `available`, and wakes their queues |
-| Rescuer | 30 s | Jobs `running` with no sign of life (start or heartbeat) for `RescueStuckJobsAfter` (1 h) and past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
+| Rescuer | 30 s | Jobs `running` with no sign of life (start or heartbeat) for `RescueStuckJobsAfter` (1 h) and, unless they heartbeated, past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
 | Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them) |
 | Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
 | Periodic enqueuer | on schedule | Enqueues periodic jobs |

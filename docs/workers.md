@@ -68,8 +68,9 @@ public async Task WorkAsync(Job<ImportCsv> job, CancellationToken cancellationTo
   cadence.
 - Read them with `GetAsync` or `ListAsync`: `JobRow.Progress` and `JobRow.HeartbeatAt`. `job.Progress` is what this
   attempt last reported.
-- Neither is reset when a new attempt starts, and both stay after the job finishes. Compare `Progress.Attempt` with
-  `Attempt`, and `HeartbeatAt` with `AttemptedAt`, to tell whether they belong to the current attempt.
+- Neither is reset when a new attempt starts, and both stay after the job finishes. They belong to the current execution
+  when `Progress.At` and `HeartbeatAt` are at or after `AttemptedAt`. The attempt number alone isn't enough: a snooze
+  or a shutdown hands the same number to the next execution.
 - Writes only land while this attempt is the one running. After the job finishes, or is rescued and picked up again,
   they do nothing.
 - **An attempt that heartbeats is judged by its heartbeat.** The [rescuer](maintenance.md) leaves it alone, however

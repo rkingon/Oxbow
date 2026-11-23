@@ -68,8 +68,8 @@ public sealed class JobRow
             : null;
 
     /// <summary>
-    /// The last progress reported (<c>oxbow:progress</c> in <see cref="Metadata"/>), from any attempt: see
-    /// <see cref="JobProgress.Attempt"/>.
+    /// The last progress reported (<c>oxbow:progress</c> in <see cref="Metadata"/>), from any attempt: compare its
+    /// <see cref="JobProgress.At"/> with <see cref="AttemptedAt"/>.
     /// </summary>
     public JobProgress? Progress
     {

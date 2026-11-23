@@ -12,7 +12,9 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
 {
     private static readonly TimeSpan MaxHeartbeatInterval = TimeSpan.FromSeconds(30);
 
-    private long _lastWrite;
+    private const long NeverWritten = long.MinValue;
+
+    private long _lastWrite = NeverWritten;
 
     public DateTimeOffset Now => timeProvider.GetUtcNow();
 
@@ -24,7 +26,7 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
     {
         var last = Interlocked.Read(ref _lastWrite);
         var now = timeProvider.GetTimestamp();
-        if ((last != 0 && timeProvider.GetElapsedTime(last, now) < HeartbeatInterval)
+        if ((last != NeverWritten && timeProvider.GetElapsedTime(last, now) < HeartbeatInterval)
             || Interlocked.CompareExchange(ref _lastWrite, now, last) != last)
         {
             return;
