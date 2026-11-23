@@ -81,9 +81,25 @@ internal sealed class OxbowHostedService(
         Log.Started(_logger, runtime.ClientId, string.Join(", ", _producers.Keys));
     }
 
-    // Once disposed, the container's data source is gone; there's nothing left to stop gracefully.
-    public Task StopAsync(CancellationToken cancellationToken) =>
-        _disposed ? Task.CompletedTask : _stopping ??= StopCoreAsync(cancellationToken);
+    // Graceful shutdown isn't reliable once disposal has begun. Callers can overlap (RunAsync's shutdown waiter and an
+    // explicit host.StopAsync), so the first one claims the shutdown and later ones share it.
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        var claim = new Task<Task>(() => StopCoreAsync(cancellationToken));
+        var stopping = claim.Unwrap();
+        if (Interlocked.CompareExchange(ref _stopping, stopping, null) is { } existing)
+        {
+            return existing;
+        }
+
+        claim.RunSynchronously(TaskScheduler.Default);
+        return stopping;
+    }
 
     // Cancels rather than disposes: the sources own no timers or links, so disposing buys nothing and would race an
     // in-flight stop. Cancelling keeps a never-stopped service's loops from outliving the container.
@@ -100,9 +116,19 @@ internal sealed class OxbowHostedService(
             return;
         }
 
-        _fetchSource.Cancel();
-        _workSource.Cancel();
-        _notifierSource.Cancel();
+        // Worker cancellation callbacks run inline; one throwing mustn't skip the rest or fail container disposal.
+        foreach (var source in (CancellationTokenSource[])[_fetchSource, _workSource, _notifierSource])
+        {
+            try
+            {
+                source.Cancel();
+            }
+            catch (AggregateException ex)
+            {
+                Log.CancelCallbackFailed(_logger, ex);
+            }
+        }
+
         _completer?.Complete();
     }
 

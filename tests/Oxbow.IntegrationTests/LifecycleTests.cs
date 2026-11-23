@@ -101,4 +101,17 @@ public sealed class LifecycleTests(PostgresFixture database)
         app.Host.Dispose();
         await service.StopAsync(CancellationToken.None);
     }
+
+    [Fact]
+    public async Task Overlapping_stops_share_one_shutdown()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions());
+        var service = app.Host.Services.GetServices<IHostedService>().OfType<OxbowHostedService>().Single();
+
+        var first = service.StopAsync(CancellationToken.None);
+        Assert.Same(first, service.StopAsync(CancellationToken.None));
+        await first;
+        await app.DisposeAsync();
+    }
 }
