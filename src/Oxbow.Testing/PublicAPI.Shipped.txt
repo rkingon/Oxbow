@@ -24,14 +24,16 @@ Oxbow.Testing.InsertedJobFilter<TArgs>.State.init -> void
 Oxbow.Testing.InsertedJobFilter<TArgs>.Tags.get -> System.Collections.Generic.IReadOnlyList<string!>?
 Oxbow.Testing.InsertedJobFilter<TArgs>.Tags.init -> void
 Oxbow.Testing.OxbowAssert
+Oxbow.Testing.OxbowAssert.ArgsProtector.get -> Oxbow.IJobArgsProtector?
+Oxbow.Testing.OxbowAssert.ArgsProtector.init -> void
 Oxbow.Testing.OxbowAssert.FindAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.Job<TArgs>!>!>!
 Oxbow.Testing.OxbowAssert.InsertedAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Job<TArgs>!>!
 Oxbow.Testing.OxbowAssert.NotInsertedAsync<TArgs>(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction = null, Oxbow.Testing.InsertedJobFilter<TArgs>? filter = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Oxbow.Testing.OxbowAssert.OxbowAssert(string! schema = "public", string! tablePrefix = "oxbow_") -> void
 Oxbow.Testing.OxbowAssertionException
 Oxbow.Testing.OxbowAssertionException.OxbowAssertionException() -> void
-Oxbow.Testing.OxbowAssertionException.OxbowAssertionException(string! message, System.Exception! innerException) -> void
 Oxbow.Testing.OxbowAssertionException.OxbowAssertionException(string! message) -> void
+Oxbow.Testing.OxbowAssertionException.OxbowAssertionException(string! message, System.Exception! innerException) -> void
 Oxbow.Testing.WorkerHarness<TArgs, TWorker>
 Oxbow.Testing.WorkerHarness<TArgs, TWorker>.WorkAsync(TArgs args, int attempt = 1, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Testing.WorkResult!>!
 Oxbow.Testing.WorkerHarness<TArgs, TWorker>.WorkerHarness(System.IServiceProvider! services) -> void
@@ -49,6 +51,10 @@ Oxbow.Testing.WorkResult.Exception.get -> System.Exception?
 Oxbow.Testing.WorkResult.Exception.init -> void
 Oxbow.Testing.WorkResult.Outcome.get -> Oxbow.Testing.WorkOutcome
 Oxbow.Testing.WorkResult.Outcome.init -> void
+Oxbow.Testing.WorkResult.Output.get -> System.Text.Json.JsonElement?
+Oxbow.Testing.WorkResult.Output.init -> void
+Oxbow.Testing.WorkResult.Progress.get -> Oxbow.JobProgress?
+Oxbow.Testing.WorkResult.Progress.init -> void
 Oxbow.Testing.WorkResult.SnoozeDuration.get -> System.TimeSpan?
 Oxbow.Testing.WorkResult.SnoozeDuration.init -> void
 Oxbow.Testing.WorkResult.WorkResult(Oxbow.Testing.WorkOutcome Outcome, System.Exception? Exception, System.TimeSpan? SnoozeDuration) -> void

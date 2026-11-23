@@ -3,7 +3,9 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0-alpha.1] - 2026-11-23
+
+Schema version 2 and the core roadmap. **Upgrade the schema before deploying**: see the first item under Changed.
 
 ### Added
 
@@ -56,16 +58,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- `runOnStart` on periodic jobs enqueues the first run only, when the job has no persisted state yet. It no longer runs
-  on every start or change of leader. Periodic runs carry `oxbow:periodic_job` in their metadata.
-
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and
   grant `GetGrants(role, version: 2)` before deploying. The previous release keeps working against version 2.
-- Grants are versioned: `OxbowSchema.GetGrants(role, version)` returns the grants for the objects one version adds.
-  `GetGrants(role)` still returns the full set.
 - **Breaking (EF):** `AddOxbowSchema`, `RemoveOxbowSchema` and `GrantOxbowAccess` take a required `version`. A default
   of the latest version made existing migrations replay different SQL after a package upgrade. Pass `version: 1` in
   your existing Oxbow migration.
+- Grants are versioned: `OxbowSchema.GetGrants(role, version)` returns the grants for the objects one version adds.
+  `GetGrants(role)` still returns the full set.
+- `runOnStart` on periodic jobs enqueues the first run only, when the job has no persisted state yet. It no longer runs
+  on every start or change of leader. Periodic runs carry `oxbow:periodic_job` in their metadata.
 - `JobListQuery` derives from `JobFilter`, which now declares `States`, `Queues` and `Kinds`. Source compatible;
   recompile code built against an earlier release.
 
