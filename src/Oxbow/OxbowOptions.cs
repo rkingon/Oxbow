@@ -81,6 +81,12 @@ public sealed class OxbowOptions
     /// </summary>
     public object? DataSourceServiceKey { get; set; }
 
+    /// <summary>
+    /// Encrypt every kind's args at rest, not only those marked <see cref="EncryptArgsAttribute"/>. Needs an
+    /// <see cref="IJobArgsProtector"/>, e.g. <c>AddArgsEncryption()</c> from <c>Oxbow.DataProtection</c>.
+    /// </summary>
+    public bool EncryptAllArgs { get; set; }
+
     /// <summary>This node's ID, recorded in <see cref="JobRow.AttemptedBy"/>. Default: host name plus a random suffix.</summary>
     public string? ClientId { get; set; }
 

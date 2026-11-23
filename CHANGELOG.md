@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Args encryption at rest: mark a kind `[EncryptArgs]` or set `OxbowOptions.EncryptAllArgs`, and register a protector.
+  The new `Oxbow.DataProtection` package's `AddArgsEncryption()` implements `IJobArgsProtector` on ASP.NET Core Data
+  Protection. Encrypted args are stored as the JSON string `"oxbow:enc:v1:…"`; unique-by-args keys of encrypted kinds
+  are an HMAC. `IJobArgsProtector.UnprotectArgs(row)` reads stored args, and `OxbowAssert.ArgsProtector` decrypts in
+  assertions.
+  See [docs/encryption.md](docs/encryption.md).
+- Heartbeat and progress: `Job<TArgs>.HeartbeatAsync` and `ReportProgressAsync`, stored as `oxbow:heartbeat_at` and
+  `oxbow:progress` in metadata and read through `JobRow.HeartbeatAt` and `JobRow.Progress`. The rescuer uses the later
+  of `attempted_at` and the heartbeat, so a healthy long job isn't rescued, and an attempt that heartbeats is rescued
+  once its heartbeats stop, even with no timeout. `WorkResult.Progress` in `Oxbow.Testing`.
 - Batches: `IOxbowClient.InsertBatchAsync` inserts a group of jobs and its batch row in one statement (on your
   transaction, its own, or a `DbContext`'s), with `OnComplete` and `OnSuccess` callback jobs that the leader enqueues
   exactly once when the group finishes. `GetBatchAsync` reports progress, `JobRow.BatchId` and

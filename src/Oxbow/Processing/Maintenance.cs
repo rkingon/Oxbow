@@ -182,11 +182,8 @@ internal sealed class Maintenance(
             {
                 try
                 {
-                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json);
-                    var timeout = unit.GetTimeout() ?? runtime.Options.JobTimeout;
-
-                    // River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.
-                    if (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout))
+                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector);
+                    if (MayStillBeRunning(job, unit.GetTimeout() ?? runtime.Options.JobTimeout, now))
                     {
                         return null;
                     }
@@ -197,6 +194,14 @@ internal sealed class Maintenance(
                 {
                     // Args that can't be deserialized are retried by the retry policy, then discarded.
                 }
+                catch (JobArgsDecryptionException) when (MayStillBeRunning(job, runtime.Options.JobTimeout, now))
+                {
+                    // Only this node may lack the key, so the job may be running elsewhere: hold to the default timeout.
+                    return null;
+                }
+                catch (JobArgsDecryptionException)
+                {
+                }
             }
         }
 
@@ -206,6 +211,17 @@ internal sealed class Maintenance(
         }
 
         return (JobState.Retryable, nextRetry ?? retryPolicy.NextRetry(job), null);
+    }
+
+    /// <summary>
+    /// River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running. GetStuck returns an
+    /// attempt that heartbeats only once its heartbeat has gone quiet, so its timeout no longer says that.
+    /// </summary>
+    private static bool MayStillBeRunning(JobRow job, TimeSpan timeout, DateTimeOffset now)
+    {
+        var heartbeating = job.HeartbeatAt is { } heartbeatAt && job.AttemptedAt is { } started && heartbeatAt >= started;
+        return !heartbeating
+            && (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout));
     }
 
     internal async Task CleanAsync(CancellationToken cancellationToken)
