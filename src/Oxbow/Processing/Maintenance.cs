@@ -64,7 +64,7 @@ internal sealed class Maintenance(
                                 queues.Add(reader.GetString(0));
                                 break;
                             case "discarded":
-                                discardHooks.Enqueue(new Discard(reader.GetInt64(2), JobState.Discarded, JobDiscardReason.UniqueKeyConflict));
+                                discardHooks.Enqueue(new Discard(reader.GetInt64(2), JobDiscardReason.UniqueKeyConflict));
                                 break;
                         }
                     }
@@ -162,7 +162,6 @@ internal sealed class Maintenance(
                         {
                             discardHooks.Enqueue(new Discard(
                                 row.Id,
-                                row.State,
                                 row.State == JobState.Discarded ? JobDiscardReason.AttemptsExhausted : JobDiscardReason.CancelRequested,
                                 Row: row));
                         }

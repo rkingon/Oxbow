@@ -24,7 +24,12 @@ internal sealed class DiscardHandlerRegistration<THandler> : DiscardHandlerRegis
 }
 
 /// <summary>A discarded or cancelled job waiting for its handlers. <see cref="Row"/> is read by ID when absent.</summary>
-internal sealed record Discard(long Id, JobState State, JobDiscardReason Reason, Exception? Exception = null, JobRow? Row = null);
+internal sealed record Discard(long Id, JobDiscardReason Reason, Exception? Exception = null, JobRow? Row = null)
+{
+    public JobState State => Reason is JobDiscardReason.AttemptsExhausted or JobDiscardReason.UniqueKeyConflict
+        ? JobState.Discarded
+        : JobState.Cancelled;
+}
 
 /// <summary>
 /// Runs <see cref="IJobDiscardHandler"/>s on a background loop, off every worker slot and maintenance loop. Calls are
@@ -129,7 +134,7 @@ internal sealed class DiscardHooks(
     {
         if (Classify(requested, await written.ConfigureAwait(false)) is { } reason)
         {
-            Enqueue(new Discard(id, requested == JobState.Discarded ? JobState.Discarded : JobState.Cancelled, reason, exception));
+            Enqueue(new Discard(id, reason, exception));
         }
     }
 
