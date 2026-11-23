@@ -1,0 +1,12 @@
+#nullable enable
+Microsoft.Extensions.DependencyInjection.OxbowDataProtectionBuilderExtensions
+Oxbow.DataProtection.ArgsEncryptionOptions
+Oxbow.DataProtection.ArgsEncryptionOptions.ArgsEncryptionOptions() -> void
+Oxbow.DataProtection.ArgsEncryptionOptions.UniqueKeySecret.get -> byte[]?
+Oxbow.DataProtection.ArgsEncryptionOptions.UniqueKeySecret.set -> void
+Oxbow.DataProtection.DataProtectionJobArgsProtector
+Oxbow.DataProtection.DataProtectionJobArgsProtector.DataProtectionJobArgsProtector(Microsoft.AspNetCore.DataProtection.IDataProtectionProvider! provider, byte[]? uniqueKeySecret = null) -> void
+Oxbow.DataProtection.DataProtectionJobArgsProtector.HashUniqueKey(System.ReadOnlySpan<byte> uniqueKey) -> byte[]!
+Oxbow.DataProtection.DataProtectionJobArgsProtector.Protect(string! kind, string! args) -> string!
+Oxbow.DataProtection.DataProtectionJobArgsProtector.Unprotect(string! kind, string! payload) -> string!
+static Microsoft.Extensions.DependencyInjection.OxbowDataProtectionBuilderExtensions.AddArgsEncryption(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder, System.Action<Oxbow.DataProtection.ArgsEncryptionOptions!>? configure = null) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
