@@ -5,6 +5,7 @@ namespace Oxbow.Internal;
 [JsonSerializable(typeof(AttemptError))]
 [JsonSerializable(typeof(ControlPayload))]
 [JsonSerializable(typeof(InsertPayload))]
+[JsonSerializable(typeof(JobProgress))]
 internal sealed partial class OxbowJsonContext : JsonSerializerContext;
 
 internal sealed record ControlPayload(
