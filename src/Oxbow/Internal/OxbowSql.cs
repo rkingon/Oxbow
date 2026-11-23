@@ -213,6 +213,8 @@ internal sealed class OxbowSql
 
         Get = $"SELECT {Columns(prefix + "job")} FROM {job} WHERE id = @id";
 
+        GetMany = $"SELECT {Columns(prefix + "job")} FROM {job} WHERE id = ANY(@ids::bigint[])";
+
         ListTemplate = $"""
             SELECT {Columns(prefix + "job")}
             FROM {job}
@@ -280,7 +282,7 @@ internal sealed class OxbowSql
                 END
             FROM job_updates AS u
             WHERE j.id = u.id
-            RETURNING j.queue, u.new_state::text
+            RETURNING j.queue, u.new_state::text, j.id
             """;
 
         GetStuck = $"""
@@ -309,6 +311,7 @@ internal sealed class OxbowSql
             WHERE j.id = r.id
               AND j.state = 'running'
               AND j.attempted_at < @stuck_horizon
+            RETURNING {Columns("j")}
             """;
 
         DeleteFinalized = $"""
@@ -425,6 +428,8 @@ internal sealed class OxbowSql
     public string Delete { get; }
 
     public string Get { get; }
+
+    public string GetMany { get; }
 
     /// <summary>Format with the keyset comparison (<c>&gt;</c> or <c>&lt;</c>) and the order (<c>ASC</c> or <c>DESC</c>).</summary>
     public string ListTemplate { get; }

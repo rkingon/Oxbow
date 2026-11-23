@@ -16,6 +16,7 @@ internal sealed class Maintenance(
     IRetryPolicy retryPolicy,
     TimeProvider timeProvider,
     Action<string> onQueueAvailable,
+    DiscardHooks discardHooks,
     ILogger logger)
 {
     private const int BatchSize = 1_000;
@@ -57,9 +58,14 @@ internal sealed class Maintenance(
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                     {
                         count++;
-                        if (reader.GetString(1) == "available")
+                        switch (reader.GetString(1))
                         {
-                            queues.Add(reader.GetString(0));
+                            case "available":
+                                queues.Add(reader.GetString(0));
+                                break;
+                            case "discarded":
+                                discardHooks.Enqueue(new Discard(reader.GetInt64(2), JobState.Discarded, JobDiscardReason.UniqueKeyConflict));
+                                break;
                         }
                     }
                 }
@@ -149,7 +155,18 @@ internal sealed class Maintenance(
                     });
                     update.Parameters.Add(OxbowClient.TextArray("state", decisions.Select(d => JobStates.ToDb(d.State)).ToArray()));
                     update.Parameters.AddWithValue("stuck_horizon", stuckHorizon);
-                    rescued += await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    foreach (var row in await JobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))
+                    {
+                        rescued++;
+                        if (row.State is JobState.Discarded or JobState.Cancelled)
+                        {
+                            discardHooks.Enqueue(new Discard(
+                                row.Id,
+                                row.State,
+                                row.State == JobState.Discarded ? JobDiscardReason.AttemptsExhausted : JobDiscardReason.CancelRequested,
+                                Row: row));
+                        }
+                    }
                 }
             }
 

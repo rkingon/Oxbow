@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Oxbow;
 
@@ -52,4 +53,23 @@ public sealed class JobRow
 
     /// <summary>Tags attached at insert.</summary>
     public required IReadOnlyList<string> Tags { get; init; }
+
+    /// <summary>The largest output a job may record, in bytes of UTF-8 JSON (1 MiB).</summary>
+    public const int MaxOutputSize = 1024 * 1024;
+
+    /// <summary>The output the worker recorded when the job completed (<c>metadata.output</c>), if any.</summary>
+    public JsonElement? Output =>
+        Metadata.ValueKind == JsonValueKind.Object && Metadata.TryGetProperty("output", out var output) ? output : null;
+
+    /// <summary>Deserializes <see cref="Output"/>.</summary>
+    /// <typeparam name="T">The output type.</typeparam>
+    /// <param name="options">
+    /// Serializer options, typically the client's <see cref="OxbowOptions.JsonSerializerOptions"/>. Default:
+    /// <see cref="JsonSerializerOptions.Web"/>.
+    /// </param>
+    /// <returns>The output, or <see langword="default"/> if none was recorded.</returns>
+    public T? GetOutput<T>(JsonSerializerOptions? options = null) =>
+        Output is { } output
+            ? output.Deserialize((JsonTypeInfo<T>)(options ?? JsonSerializerOptions.Web).GetTypeInfo(typeof(T)))
+            : default;
 }

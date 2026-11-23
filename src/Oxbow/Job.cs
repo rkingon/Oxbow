@@ -44,4 +44,24 @@ public sealed class Job<TArgs>
 
     /// <summary>Arbitrary JSON metadata.</summary>
     public JsonElement Metadata => Row.Metadata;
+
+    /// <summary>The output recorded with <see cref="SetOutput"/>, not yet serialized.</summary>
+    public object? Output => _output;
+
+    private volatile object? _output;
+
+    /// <summary>
+    /// Records the job's result, stored in <c>metadata.output</c> when the job completes and readable with
+    /// <see cref="JobRow.GetOutput{T}"/>. Discarded if the attempt doesn't complete. A later call replaces an earlier
+    /// one.
+    /// </summary>
+    /// <param name="output">
+    /// The result, serialized as its runtime type with the client's <c>JsonSerializerOptions</c>. At most
+    /// <see cref="JobRow.MaxOutputSize"/> bytes of JSON; a larger output fails the attempt.
+    /// </param>
+    public void SetOutput(object output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        _output = output;
+    }
 }

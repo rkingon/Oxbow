@@ -76,7 +76,7 @@ public sealed class WorkerHarness<TArgs, TWorker>(IServiceProvider services)
             try
             {
                 await pipeline(new JobContext(row, args, scope.ServiceProvider, linked.Token)).ConfigureAwait(false);
-                return new WorkResult(WorkOutcome.Completed, null, null);
+                return new WorkResult(WorkOutcome.Completed, null, null) { Output = SerializeOutput(job.Output, json) };
             }
             catch (JobSnoozeException ex)
             {
@@ -97,6 +97,28 @@ public sealed class WorkerHarness<TArgs, TWorker>(IServiceProvider services)
                 return new WorkResult(WorkOutcome.Errored, ex, null);
             }
         }
+    }
+
+    // Mirrors Oxbow's executor: the runtime type, the client's options, and an oversized output fails the attempt.
+    private static JsonElement? SerializeOutput(object? output, JsonSerializerOptions json)
+    {
+        if (output is null)
+        {
+            return null;
+        }
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(output, json.GetTypeInfo(output.GetType()));
+        if (bytes.Length > JobRow.MaxOutputSize)
+        {
+            throw new InvalidOperationException(string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                "Job output is {0:N0} bytes of JSON, over the {1:N0}-byte limit (JobRow.MaxOutputSize).",
+                bytes.Length,
+                JobRow.MaxOutputSize));
+        }
+
+        using var document = JsonDocument.Parse(bytes);
+        return document.RootElement.Clone();
     }
 }
 
@@ -123,4 +145,11 @@ public enum WorkOutcome
 /// <param name="Outcome">What happened.</param>
 /// <param name="Exception">The exception the worker threw, if any.</param>
 /// <param name="SnoozeDuration">The snooze duration, if snoozed.</param>
-public sealed record WorkResult(WorkOutcome Outcome, Exception? Exception, TimeSpan? SnoozeDuration);
+public sealed record WorkResult(WorkOutcome Outcome, Exception? Exception, TimeSpan? SnoozeDuration)
+{
+    /// <summary>
+    /// The output the worker recorded with <see cref="Job{TArgs}.SetOutput"/>, as Oxbow would store it. Only set when
+    /// <see cref="Outcome"/> is <see cref="WorkOutcome.Completed"/>.
+    /// </summary>
+    public JsonElement? Output { get; init; }
+}

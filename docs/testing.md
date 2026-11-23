@@ -27,6 +27,7 @@ var harness = new WorkerHarness<SendWelcomeEmail, SendWelcomeEmailWorker>(servic
 var result = await harness.WorkAsync(new SendWelcomeEmail("ada@example.com"));
 
 Assert.Equal(WorkOutcome.Completed, result.Outcome);
+Assert.Equal("sent", result.Output?.GetProperty("status").GetString());  // what job.SetOutput recorded
 ```
 
 The harness opens a DI scope, runs your registered work middleware, applies the worker's timeout, and reports what

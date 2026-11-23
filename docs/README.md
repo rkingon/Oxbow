@@ -4,6 +4,7 @@
 - [Migrations](migrations.md) and [least privilege](least-privilege.md)
 - [Workers](workers.md): timeouts, snooze, self-cancel, error handling
 - [Retries](retries.md)
+- [Discard handlers](discard-handlers.md): react when a job is discarded or cancelled
 - [Cancellation](cancellation.md)
 - [Unique jobs](unique-jobs.md)
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)

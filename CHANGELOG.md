@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Job output: `job.SetOutput(value)` records a result in `metadata.output` with the completion, read back with
+  `JobRow.Output` and `JobRow.GetOutput<T>()`; capped at `JobRow.MaxOutputSize` (1 MiB). `WorkResult.Output` in
+  `Oxbow.Testing`.
+- Discard handlers: `AddDiscardHandler<T>()` registers an `IJobDiscardHandler`, called best-effort after a job is
+  discarded or cancelled by its worker, a cancel request, the rescuer or the scheduler's unique-key check.
+
 ### Changed
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and

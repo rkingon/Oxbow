@@ -51,4 +51,14 @@ internal static partial class Log
 
     [LoggerMessage(16, LogLevel.Warning, "A cancellation callback threw while disposing Oxbow.")]
     public static partial void CancelCallbackFailed(ILogger logger, Exception exception);
+
+    // 70–79: job output and discard handlers.
+    [LoggerMessage(70, LogLevel.Error, "Discard handler {Handler} failed for job {JobId}.")]
+    public static partial void DiscardHandlerFailed(ILogger logger, Exception exception, string handler, long jobId);
+
+    [LoggerMessage(71, LogLevel.Warning, "Dropped {Count} discard handler calls, starting with job {JobId}.")]
+    public static partial void DiscardHandlersDropped(ILogger logger, int count, long jobId);
+
+    [LoggerMessage(72, LogLevel.Error, "Reading {Count} discarded jobs for their handlers failed; those calls are dropped.")]
+    public static partial void DiscardReadFailed(ILogger logger, Exception exception, int count);
 }

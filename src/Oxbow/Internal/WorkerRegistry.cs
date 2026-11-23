@@ -35,6 +35,8 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
         public override DateTimeOffset? GetNextRetry() => worker.GetNextRetry(job);
 
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
+
+        public override object? Output => job.Output;
     }
 }
 
@@ -47,6 +49,8 @@ internal abstract class WorkUnit
     public abstract DateTimeOffset? GetNextRetry();
 
     public abstract Task WorkAsync(CancellationToken cancellationToken);
+
+    public abstract object? Output { get; }
 }
 
 /// <summary>Every registered worker by kind and alias, validated when first resolved (at host start).</summary>

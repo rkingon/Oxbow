@@ -37,6 +37,32 @@ services.AddOxbow(...).AddWorker<ResizeImage, ResizeImageWorker>();
 | throws `JobSnoozeException(delay)` | `scheduled` for `now + delay`; the attempt isn't spent; `metadata.snoozes` is incremented |
 | throws `JobCancelException` | `cancelled`, with the error recorded; never retried |
 
+## Output
+
+A worker can record a result. It's stored in `metadata.output` when the job completes, in the same write as the
+completion, and read back from any `JobRow` (`GetAsync`, `ListAsync`):
+
+```csharp
+public async Task WorkAsync(Job<ResizeImage> job, CancellationToken cancellationToken)
+{
+    var url = await images.SaveAsync(/* … */);
+    job.SetOutput(new ResizeResult(url));
+}
+
+var job = await oxbow.GetAsync(id);
+var result = job?.GetOutput<ResizeResult>(jsonOptions);  // or job.Output, the raw JsonElement
+```
+
+- Serialized as its runtime type with `OxbowOptions.JsonSerializerOptions`; with a `JsonSerializerContext`, register
+  the output type there too. Pass the same options to `GetOutput<T>` (the default is `JsonSerializerOptions.Web`,
+  which matches Oxbow's default).
+- Only recorded on completion. If the attempt fails, snoozes or is cancelled, the output is dropped, as in River.
+  `SetOutput` again replaces it.
+- At most `JobRow.MaxOutputSize` (1 MiB) of JSON. A larger output, or one that can't be serialized, fails the attempt
+  with an `InvalidOperationException` in `errors`, and the job is retried like any other failure. Store large results
+  elsewhere and record a reference: the output lives in the job row, and `metadata` has a GIN index.
+- A retried job (`RetryAsync`) keeps its previous output until it completes again.
+
 ## Timeouts
 
 The default is `OxbowOptions.JobTimeout` (1 minute). Override it per worker:

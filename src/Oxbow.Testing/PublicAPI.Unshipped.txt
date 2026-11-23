@@ -1,1 +1,3 @@
 #nullable enable
+Oxbow.Testing.WorkResult.Output.get -> System.Text.Json.JsonElement?
+Oxbow.Testing.WorkResult.Output.init -> void
