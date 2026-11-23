@@ -211,9 +211,16 @@ internal sealed class Maintenance(
         return (JobState.Retryable, nextRetry ?? retryPolicy.NextRetry(job), null);
     }
 
-    /// <summary>River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.</summary>
-    private static bool MayStillBeRunning(JobRow job, TimeSpan timeout, DateTimeOffset now) =>
-        OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout);
+    /// <summary>
+    /// River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running. GetStuck returns an
+    /// attempt that heartbeats only once its heartbeat has gone quiet, so its timeout no longer says that.
+    /// </summary>
+    private static bool MayStillBeRunning(JobRow job, TimeSpan timeout, DateTimeOffset now)
+    {
+        var heartbeating = job.HeartbeatAt is { } heartbeatAt && job.AttemptedAt is { } started && heartbeatAt >= started;
+        return !heartbeating
+            && (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout));
+    }
 
     internal async Task CleanAsync(CancellationToken cancellationToken)
     {

@@ -18,3 +18,26 @@ Oxbow.JobArgsProtectorExtensions
 Oxbow.OxbowOptions.EncryptAllArgs.get -> bool
 Oxbow.OxbowOptions.EncryptAllArgs.set -> void
 static Oxbow.JobArgsProtectorExtensions.UnprotectArgs(this Oxbow.IJobArgsProtector! protector, Oxbow.JobRow! row) -> System.Text.Json.JsonElement
+Oxbow.Job<TArgs>.HeartbeatAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Job<TArgs>.Progress.get -> Oxbow.JobProgress?
+Oxbow.Job<TArgs>.ReportProgressAsync(double percent, string? message = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.JobProgress
+Oxbow.JobProgress.<Clone>$() -> Oxbow.JobProgress!
+Oxbow.JobProgress.At.get -> System.DateTimeOffset
+Oxbow.JobProgress.At.init -> void
+Oxbow.JobProgress.Attempt.get -> int
+Oxbow.JobProgress.Attempt.init -> void
+Oxbow.JobProgress.Deconstruct(out double Percent, out string? Message, out int Attempt, out System.DateTimeOffset At) -> void
+Oxbow.JobProgress.Equals(Oxbow.JobProgress? other) -> bool
+Oxbow.JobProgress.JobProgress(double Percent, string? Message, int Attempt, System.DateTimeOffset At) -> void
+Oxbow.JobProgress.Message.get -> string?
+Oxbow.JobProgress.Message.init -> void
+Oxbow.JobProgress.Percent.get -> double
+Oxbow.JobProgress.Percent.init -> void
+Oxbow.JobRow.HeartbeatAt.get -> System.DateTimeOffset?
+Oxbow.JobRow.Progress.get -> Oxbow.JobProgress?
+override Oxbow.JobProgress.Equals(object? obj) -> bool
+override Oxbow.JobProgress.GetHashCode() -> int
+override Oxbow.JobProgress.ToString() -> string!
+static Oxbow.JobProgress.operator !=(Oxbow.JobProgress? left, Oxbow.JobProgress? right) -> bool
+static Oxbow.JobProgress.operator ==(Oxbow.JobProgress? left, Oxbow.JobProgress? right) -> bool

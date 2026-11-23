@@ -73,6 +73,7 @@ internal sealed class JobExecutor(
             await using (scope.ConfigureAwait(false))
             {
                 unit = registration.CreateUnit(row, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector);
+                unit.Attach(new JobControl(runtime, row, timeProvider));
                 timeout = unit.GetTimeout() ?? timeout;
                 timeoutSource = timeout > TimeSpan.Zero && !OxbowRuntime.IsInfinite(timeout)
                     ? new CancellationTokenSource(timeout, timeProvider)

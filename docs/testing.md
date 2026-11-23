@@ -31,7 +31,8 @@ Assert.Equal(WorkOutcome.Completed, result.Outcome);
 ```
 
 The harness opens a DI scope, runs your registered work middleware, applies the worker's timeout, and reports what
-Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`.
+Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`. `result.Progress` is the progress the
+worker last reported; heartbeats do nothing.
 
 For full integration tests, run Postgres in a container (Testcontainers), apply `OxbowSchema.GetMigrations(0)`, and use a
 unique `TablePrefix` per test to isolate them, as Oxbow's own suite does.
