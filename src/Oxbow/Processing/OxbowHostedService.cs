@@ -27,6 +27,8 @@ internal sealed class OxbowHostedService(
     private readonly CancellationTokenSource _notifierSource = new();
     private readonly Dictionary<string, Producer> _producers = new(StringComparer.Ordinal);
     private readonly List<Task> _loops = [];
+    private Task? _stopping;
+    private bool _disposed;
     private Task _notifierLoop = Task.CompletedTask;
     private Task _completerLoop = Task.CompletedTask;
     private Completer? _completer;
@@ -79,7 +81,58 @@ internal sealed class OxbowHostedService(
         Log.Started(_logger, runtime.ClientId, string.Join(", ", _producers.Keys));
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    // Graceful shutdown isn't reliable once disposal has begun. Callers can overlap (RunAsync's shutdown waiter and an
+    // explicit host.StopAsync), so the first one claims the shutdown and later ones share it.
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        var claim = new Task<Task>(() => StopCoreAsync(cancellationToken));
+        var stopping = claim.Unwrap();
+        if (Interlocked.CompareExchange(ref _stopping, stopping, null) is { } existing)
+        {
+            return existing;
+        }
+
+        claim.RunSynchronously(TaskScheduler.Default);
+        return stopping;
+    }
+
+    // Cancels rather than disposes: the sources own no timers or links, so disposing buys nothing and would race an
+    // in-flight stop. Cancelling keeps a never-stopped service's loops from outliving the container.
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_stopping is not null)
+        {
+            return;
+        }
+
+        // Worker cancellation callbacks run inline; one throwing mustn't skip the rest or fail container disposal.
+        foreach (var source in (CancellationTokenSource[])[_fetchSource, _workSource, _notifierSource])
+        {
+            try
+            {
+                source.Cancel();
+            }
+            catch (AggregateException ex)
+            {
+                Log.CancelCallbackFailed(_logger, ex);
+            }
+        }
+
+        _completer?.Complete();
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         await _fetchSource.CancelAsync().ConfigureAwait(false);
         await Task.WhenAll(_loops).ConfigureAwait(false);
@@ -107,13 +160,6 @@ internal sealed class OxbowHostedService(
         await _completerLoop.ConfigureAwait(false);
         await _notifierSource.CancelAsync().ConfigureAwait(false);
         await _notifierLoop.ConfigureAwait(false);
-    }
-
-    public void Dispose()
-    {
-        _fetchSource.Dispose();
-        _workSource.Dispose();
-        _notifierSource.Dispose();
     }
 
     private async Task CheckSchemaVersionAsync(CancellationToken cancellationToken)

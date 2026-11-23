@@ -48,4 +48,7 @@ internal static partial class Log
 
     [LoggerMessage(15, LogLevel.Warning, "Retry policy returned {NextRetry}, which is in the past; using the default policy for job {JobId}.")]
     public static partial void RetryInPast(ILogger logger, DateTimeOffset nextRetry, long jobId);
+
+    [LoggerMessage(16, LogLevel.Warning, "A cancellation callback threw while disposing Oxbow.")]
+    public static partial void CancelCallbackFailed(ILogger logger, Exception exception);
 }

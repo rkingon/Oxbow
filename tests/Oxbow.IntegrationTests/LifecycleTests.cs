@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Hosting;
+using Oxbow.Processing;
+
 namespace Oxbow.IntegrationTests;
 
 public sealed class LifecycleTests(PostgresFixture database)
@@ -79,5 +82,36 @@ public sealed class LifecycleTests(PostgresFixture database)
         Assert.Equal(Enumerable.Range(0, 100).Select(i => $"{i}"), results.Select(r => r.Job.Args.GetProperty("value").GetString()));
         Assert.All(results, r => Assert.Equal(["bulk-insert"], r.Job.Tags));
         Assert.Null(await app.Client.GetAsync(results[0].Job.Id));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Stopping_after_dispose_does_not_throw(bool stopHostFirst)
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions());
+        var service = app.Host.Services.GetServices<IHostedService>().OfType<OxbowHostedService>().Single();
+
+        if (stopHostFirst)
+        {
+            await app.Host.StopAsync();
+        }
+
+        app.Host.Dispose();
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Overlapping_stops_share_one_shutdown()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions());
+        var service = app.Host.Services.GetServices<IHostedService>().OfType<OxbowHostedService>().Single();
+
+        var first = service.StopAsync(CancellationToken.None);
+        Assert.Same(first, service.StopAsync(CancellationToken.None));
+        await first;
+        await app.DisposeAsync();
     }
 }
