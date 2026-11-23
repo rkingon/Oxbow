@@ -402,10 +402,10 @@ internal sealed class OxbowSql
 
         QueueDeleteExpired = $"DELETE FROM {queue} WHERE updated_at < @horizon";
 
-        // Batches. The batch row is written in the same statement as its members, so no finisher can see a batch
-        // without them, whether or not the caller's connection is in a transaction.
         BatchNextId = $"SELECT nextval('{schema}.{prefix}batch_id_seq')";
 
+        // The batch row is written in the same statement as its members, so no finisher can see a batch without them,
+        // whether or not the caller's connection is in a transaction.
         InsertBatch = $"""
             WITH jobs AS (
             {InsertMany}
