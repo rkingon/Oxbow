@@ -27,6 +27,8 @@ internal sealed class OxbowHostedService(
     private readonly CancellationTokenSource _notifierSource = new();
     private readonly Dictionary<string, Producer> _producers = new(StringComparer.Ordinal);
     private readonly List<Task> _loops = [];
+    private Task? _stopping;
+    private bool _disposed;
     private Task _notifierLoop = Task.CompletedTask;
     private Task _completerLoop = Task.CompletedTask;
     private Completer? _completer;
@@ -79,7 +81,32 @@ internal sealed class OxbowHostedService(
         Log.Started(_logger, runtime.ClientId, string.Join(", ", _producers.Keys));
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    // Once disposed, the container's data source is gone; there's nothing left to stop gracefully.
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        _disposed ? Task.CompletedTask : _stopping ??= StopCoreAsync(cancellationToken);
+
+    // Cancels rather than disposes: the sources own no timers or links, so disposing buys nothing and would race an
+    // in-flight stop. Cancelling keeps a never-stopped service's loops from outliving the container.
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_stopping is not null)
+        {
+            return;
+        }
+
+        _fetchSource.Cancel();
+        _workSource.Cancel();
+        _notifierSource.Cancel();
+        _completer?.Complete();
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         await _fetchSource.CancelAsync().ConfigureAwait(false);
         await Task.WhenAll(_loops).ConfigureAwait(false);
@@ -107,13 +134,6 @@ internal sealed class OxbowHostedService(
         await _completerLoop.ConfigureAwait(false);
         await _notifierSource.CancelAsync().ConfigureAwait(false);
         await _notifierLoop.ConfigureAwait(false);
-    }
-
-    public void Dispose()
-    {
-        _fetchSource.Dispose();
-        _workSource.Dispose();
-        _notifierSource.Dispose();
     }
 
     private async Task CheckSchemaVersionAsync(CancellationToken cancellationToken)
