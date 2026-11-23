@@ -28,6 +28,11 @@ All notable changes to this project are documented here. The format follows
   0.1.0-alpha.3 pick those up at their cancel poll instead.
 - `JobFilter`, now the base of `JobListQuery`, with `BatchId`, `Metadata` (JSON containment) and `Tags` (all of)
   filters for `ListAsync` and the bulk operations.
+- Job output: `job.SetOutput(value)` records a result in `metadata.output` with the completion, read back with
+  `JobRow.Output` and `JobRow.GetOutput<T>()`; capped at `JobRow.MaxOutputSize` (1 MiB). `WorkResult.Output` in
+  `Oxbow.Testing`.
+- Discard handlers: `AddDiscardHandler<T>()` registers an `IJobDiscardHandler`, called best-effort after a job is
+  discarded or cancelled by its worker, a cancel request, the rescuer or the scheduler's unique-key check.
 - Durable periodic jobs. Run times of every periodic job are persisted in `{prefix}periodic_job` (schema version 2), so
   a leader failover or restart neither skips nor repeats a run, and missed runs catch up once. Periodic jobs can be
   stored and managed at runtime: `IOxbowClient.CreatePeriodicJobAsync`, `UpsertPeriodicJobAsync`,

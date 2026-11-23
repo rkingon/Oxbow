@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Oxbow.Internal;
 
 namespace Oxbow;
@@ -104,4 +105,36 @@ public sealed class JobRow
         && id.TryGetInt64(out var value)
             ? value
             : null;
+
+    /// <summary>The largest output a job may record, in bytes of UTF-8 JSON (1 MiB).</summary>
+    public const int MaxOutputSize = 1024 * 1024;
+
+    /// <summary>The output the worker recorded when the job completed (<c>metadata.output</c>), if any.</summary>
+    public JsonElement? Output =>
+        Metadata.ValueKind == JsonValueKind.Object && Metadata.TryGetProperty("output", out var output) ? output : null;
+
+    /// <summary>Deserializes <see cref="Output"/>.</summary>
+    /// <typeparam name="T">The output type.</typeparam>
+    /// <param name="options">
+    /// Serializer options, typically the client's <see cref="OxbowOptions.JsonSerializerOptions"/>. Default:
+    /// <see cref="JsonSerializerOptions.Web"/>.
+    /// </param>
+    /// <returns>The output, or <see langword="default"/> if none was recorded.</returns>
+    public T? GetOutput<T>(JsonSerializerOptions? options = null)
+    {
+        if (Output is not { } output)
+        {
+            return default;
+        }
+
+        options ??= JsonSerializerOptions.Web;
+        if (!options.IsReadOnly)
+        {
+            // As the client does: leave the caller's options mutable, and fill in a missing resolver.
+            options = new JsonSerializerOptions(options);
+            options.TypeInfoResolver ??= new DefaultJsonTypeInfoResolver();
+        }
+
+        return output.Deserialize((JsonTypeInfo<T>)options.GetTypeInfo(typeof(T)));
+    }
 }

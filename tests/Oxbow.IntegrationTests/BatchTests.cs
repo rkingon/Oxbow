@@ -408,6 +408,7 @@ public sealed class BatchTests(PostgresFixture database)
             services.GetRequiredService<IRetryPolicy>(),
             TimeProvider.System,
             _ => { },
+            new DiscardHooks(services.GetRequiredService<OxbowRuntime>(), [], services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance),
             NullLogger.Instance);
     }
 
