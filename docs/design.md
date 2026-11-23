@@ -378,5 +378,4 @@ safe. Any job that doesn't report back is left `running`, and the rescuer picks 
 
 ## Not yet built
 
-- `Oxbow.Dashboard`.
-- Durable periodic-job schedules (River Pro).
+See [roadmap.md](roadmap.md).

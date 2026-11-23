@@ -14,4 +14,4 @@
 - [Observability](observability.md)
 - [Testing](testing.md)
 - [Benchmarks](benchmarks.md)
-- Reference: [design](design.md), [differences from River](differences-from-river.md)
+- Reference: [design](design.md), [differences from River](differences-from-river.md), [roadmap](roadmap.md)
