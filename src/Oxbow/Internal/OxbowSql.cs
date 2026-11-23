@@ -14,6 +14,7 @@ internal sealed class OxbowSql
         var bitmask = $"{schema}.{prefix}job_state_in_bitmask";
         var leader = $"{schema}.{prefix}leader";
         var queue = $"{schema}.{prefix}queue";
+        var periodic = $"{schema}.{prefix}periodic_job";
 
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
@@ -396,6 +397,112 @@ internal sealed class OxbowSql
             """;
 
         QueueDeleteExpired = $"DELETE FROM {queue} WHERE updated_at < @horizon";
+
+        // Durable periodic jobs. A stored schedule is a cron expression with its time zone, or an interval.
+        const string everyParam = "@every_seconds::float8 * interval '1 second'";
+
+        PeriodicJobUpsert = $"""
+            INSERT INTO {periodic} AS p (name, kind, args, options, cron, time_zone, every, next_run_at)
+            VALUES (@name, @kind, @args::jsonb, @options::jsonb, @cron, @time_zone, {everyParam}, @next_run_at)
+            ON CONFLICT (name) DO UPDATE SET
+                kind = excluded.kind,
+                args = excluded.args,
+                options = excluded.options,
+                cron = excluded.cron,
+                time_zone = excluded.time_zone,
+                every = excluded.every,
+                next_run_at = CASE
+                    WHEN (p.cron, p.time_zone, p.every) IS DISTINCT FROM (excluded.cron, excluded.time_zone, excluded.every)
+                    THEN excluded.next_run_at
+                    ELSE coalesce(p.next_run_at, excluded.next_run_at)
+                END,
+                updated_at = now()
+            WHERE NOT p.registered_in_code
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobPause = $"""
+            UPDATE {periodic} AS p
+            SET paused_at = coalesce(p.paused_at, now()), updated_at = now()
+            WHERE name = @name
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobLock = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} WHERE name = @name FOR UPDATE";
+
+        PeriodicJobResume = $"""
+            UPDATE {periodic} AS p
+            SET paused_at = NULL, next_run_at = @next_run_at, updated_at = now()
+            WHERE name = @name AND paused_at IS NOT NULL
+            RETURNING {PeriodicColumns("p")}
+            """;
+
+        PeriodicJobDelete = $"DELETE FROM {periodic} AS p WHERE name = @name RETURNING {PeriodicColumns("p")}";
+
+        PeriodicJobGet = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} WHERE name = @name";
+
+        PeriodicJobList = $"SELECT {PeriodicColumns(prefix + "periodic_job")} FROM {periodic} ORDER BY name";
+
+        // The leader's sync of the jobs registered in its code: create missing rows, take up schedule changes, and
+        // refresh the rest hourly so rows for jobs no longer in any leader's code can be told apart and deleted.
+        PeriodicJobSyncCode = $"""
+            INSERT INTO {periodic} (name, registered_in_code, cron, time_zone, every, next_run_at)
+            SELECT i.name, true, i.cron, i.time_zone, i.every_seconds * interval '1 second', i.first_run_at
+            FROM unnest(@name::text[], @cron::text[], @time_zone::text[], @every_seconds::float8[], @first_run_at::timestamptz[])
+                AS i(name, cron, time_zone, every_seconds, first_run_at)
+            ON CONFLICT (name) DO NOTHING;
+
+            UPDATE {periodic} AS p
+            SET cron = i.cron,
+                time_zone = i.time_zone,
+                every = i.every_seconds * interval '1 second',
+                next_run_at = CASE
+                    WHEN (p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                    THEN i.next_occurrence
+                    ELSE p.next_run_at
+                END,
+                updated_at = now()
+            FROM unnest(@name::text[], @cron::text[], @time_zone::text[], @every_seconds::float8[], @next_occurrence::timestamptz[])
+                AS i(name, cron, time_zone, every_seconds, next_occurrence)
+            WHERE p.name = i.name
+              AND p.registered_in_code
+              AND ((p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                   OR p.updated_at < now() - interval '1 hour');
+
+            DELETE FROM {periodic} WHERE registered_in_code AND updated_at < now() - interval '24 hours';
+            """;
+
+        PeriodicJobCodeConflicts = $"SELECT name FROM {periodic} WHERE name = ANY(@name) AND NOT registered_in_code";
+
+        PeriodicJobGetDue = $"""
+            SELECT {PeriodicColumns(prefix + "periodic_job")}, now()
+            FROM {periodic}
+            WHERE paused_at IS NULL
+              AND next_run_at <= now()
+              AND (NOT registered_in_code OR name = ANY(@code_names))
+            ORDER BY next_run_at
+            LIMIT @max
+            """;
+
+        PeriodicJobUntilNext = $"""
+            SELECT extract(epoch FROM min(next_run_at) - now())::float8
+            FROM {periodic}
+            WHERE paused_at IS NULL
+              AND (NOT registered_in_code OR name = ANY(@code_names))
+            """;
+
+        // Guarded on the row as read, so of two leaders across a failover only one advances it and enqueues the run,
+        // and a definition changed since it was read isn't run with the old one.
+        PeriodicJobAdvance = $"""
+            UPDATE {periodic}
+            SET next_run_at = @next_run_at,
+                last_run_at = CASE WHEN @ran THEN now() ELSE last_run_at END,
+                kind = coalesce(@kind, kind)
+            WHERE name = @name
+              AND next_run_at = @expected_next_run_at
+              AND updated_at = @expected_updated_at
+              AND paused_at IS NULL
+            """;
     }
 
     public string InsertChannel { get; }
@@ -458,6 +565,36 @@ internal sealed class OxbowSql
     public string QueueResume { get; }
 
     public string QueueDeleteExpired { get; }
+
+    public string PeriodicJobUpsert { get; }
+
+    public string PeriodicJobPause { get; }
+
+    public string PeriodicJobLock { get; }
+
+    public string PeriodicJobResume { get; }
+
+    public string PeriodicJobDelete { get; }
+
+    public string PeriodicJobGet { get; }
+
+    public string PeriodicJobList { get; }
+
+    public string PeriodicJobSyncCode { get; }
+
+    public string PeriodicJobCodeConflicts { get; }
+
+    public string PeriodicJobGetDue { get; }
+
+    public string PeriodicJobUntilNext { get; }
+
+    public string PeriodicJobAdvance { get; }
+
+    /// <summary>The periodic job columns, in the order <see cref="PeriodicJobRowReader"/> reads them.</summary>
+    private static string PeriodicColumns(string alias) =>
+        $"{alias}.name, {alias}.registered_in_code, {alias}.kind, {alias}.args::text, {alias}.options::text, {alias}.cron, " +
+        $"{alias}.time_zone, extract(epoch FROM {alias}.every)::float8, {alias}.paused_at, {alias}.next_run_at, " +
+        $"{alias}.last_run_at, {alias}.created_at, {alias}.updated_at";
 
     /// <summary>The row columns, in the order <see cref="JobRowReader"/> reads them.</summary>
     private static string Columns(string alias) =>

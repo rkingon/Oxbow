@@ -4,3 +4,40 @@
 const Oxbow.OxbowSchema.LatestVersion = 2 -> int
 static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
 static Oxbow.OxbowSchema.GetGrants(string! role, int version, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
+Oxbow.IOxbowClient.DeletePeriodicJobAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow?>!
+Oxbow.IOxbowClient.GetPeriodicJobAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow?>!
+Oxbow.IOxbowClient.ListPeriodicJobsAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Oxbow.PeriodicJobRow!>!>!
+Oxbow.IOxbowClient.PausePeriodicJobAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow?>!
+Oxbow.IOxbowClient.ResumePeriodicJobAsync(string! name, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow?>!
+Oxbow.IOxbowClient.UpsertPeriodicJobAsync(string! name, Oxbow.PeriodicSchedule! schedule, Oxbow.IJobArgs! args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow!>!
+Oxbow.IOxbowClient.UpsertPeriodicJobAsync(string! name, Oxbow.PeriodicSchedule! schedule, string! kind, System.Text.Json.JsonElement args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow!>!
+Oxbow.OxbowOptions.AddPeriodicJob(string! name, Oxbow.PeriodicSchedule! schedule, System.Func<Oxbow.IJobArgs!>! createArgs, Oxbow.InsertOptions? options = null, bool runOnStart = false) -> Oxbow.OxbowOptions!
+Oxbow.PeriodicJob.Name.get -> string?
+Oxbow.PeriodicJob.Name.init -> void
+Oxbow.PeriodicJobRow
+Oxbow.PeriodicJobRow.Args.get -> System.Text.Json.JsonElement?
+Oxbow.PeriodicJobRow.Args.init -> void
+Oxbow.PeriodicJobRow.CreatedAt.get -> System.DateTimeOffset
+Oxbow.PeriodicJobRow.CreatedAt.init -> void
+Oxbow.PeriodicJobRow.Kind.get -> string?
+Oxbow.PeriodicJobRow.Kind.init -> void
+Oxbow.PeriodicJobRow.LastRunAt.get -> System.DateTimeOffset?
+Oxbow.PeriodicJobRow.LastRunAt.init -> void
+Oxbow.PeriodicJobRow.Name.get -> string!
+Oxbow.PeriodicJobRow.Name.init -> void
+Oxbow.PeriodicJobRow.NextRunAt.get -> System.DateTimeOffset?
+Oxbow.PeriodicJobRow.NextRunAt.init -> void
+Oxbow.PeriodicJobRow.Options.get -> Oxbow.InsertOptions?
+Oxbow.PeriodicJobRow.Options.init -> void
+Oxbow.PeriodicJobRow.PausedAt.get -> System.DateTimeOffset?
+Oxbow.PeriodicJobRow.PausedAt.init -> void
+Oxbow.PeriodicJobRow.PeriodicJobRow() -> void
+Oxbow.PeriodicJobRow.RegisteredInCode.get -> bool
+Oxbow.PeriodicJobRow.RegisteredInCode.init -> void
+Oxbow.PeriodicJobRow.Schedule.get -> Oxbow.PeriodicSchedule!
+Oxbow.PeriodicJobRow.Schedule.init -> void
+Oxbow.PeriodicJobRow.UpdatedAt.get -> System.DateTimeOffset
+Oxbow.PeriodicJobRow.UpdatedAt.init -> void
+virtual Oxbow.PeriodicSchedule.Expression.get -> string?
+virtual Oxbow.PeriodicSchedule.Interval.get -> System.TimeSpan?
+virtual Oxbow.PeriodicSchedule.TimeZone.get -> System.TimeZoneInfo?

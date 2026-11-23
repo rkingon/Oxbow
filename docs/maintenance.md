@@ -13,7 +13,7 @@ The leader runs:
 | Rescuer | 30 s | Jobs `running` longer than `RescueStuckJobsAfter` (1 h) and past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
 | Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them) |
 | Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
-| Periodic enqueuer | on schedule | Enqueues periodic jobs |
+| Periodic enqueuer | on schedule, re-reading every `SchedulerInterval` | Enqueues due periodic jobs from `{prefix}periodic_job` ([periodic jobs](scheduled-and-periodic-jobs.md#periodic)) |
 | Queue depth | 10 s | Publishes `oxbow.queue.depth` |
 
 A job with no timeout (`Timeout.InfiniteTimeSpan`) is never rescued, since it may legitimately still be running.

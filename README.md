@@ -10,7 +10,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Retries with exponential backoff and an errors history; snooze and self-cancel
 - Cancel a queued job, or signal a running one on any node through its `CancellationToken`
 - Unique jobs enforced by a unique index: by args, period, queue and state
-- Scheduled and periodic (interval or cron) jobs
+- Scheduled and periodic (interval or cron) jobs, with run times persisted across failovers and schedules editable at runtime
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner
@@ -133,8 +133,10 @@ builder.Services.AddOxbow(o =>
 });
 ```
 
-Only the elected leader enqueues them. Pair them with `UniqueOptions.ByPeriod` if a leader failover must never
-produce a duplicate run.
+Only the elected leader enqueues them. Run times are persisted, so a failover neither skips nor repeats a run. Name a job
+(`o.AddPeriodicJob("nightly-report", …)`) to keep its history when its schedule changes. Periodic jobs can also be
+stored and managed at runtime with `UpsertPeriodicJobAsync`, `PausePeriodicJobAsync`, `ResumePeriodicJobAsync` and
+`DeletePeriodicJobAsync`. See [periodic jobs](docs/scheduled-and-periodic-jobs.md#periodic).
 
 ## Least privilege
 

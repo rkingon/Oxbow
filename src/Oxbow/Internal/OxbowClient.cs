@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Npgsql;
 using NpgsqlTypes;
@@ -176,19 +177,250 @@ internal sealed partial class OxbowClient(
         return count;
     }
 
-    /// <summary>Inserts on a connection of its own without the unknown-kind check; used by the periodic enqueuer.</summary>
-    internal async Task InsertUncheckedAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken)
+    /// <summary>Prepares a run of a periodic job registered in code, without the unknown-kind check.</summary>
+    internal JobInsertParams PreparePeriodicRun(string name, IJobArgs args, InsertOptions? options)
     {
-        var jobs = Prepare(items, checkKinds: false);
+        var job = Prepare(args, options, timeProvider.GetUtcNow(), checkKinds: false);
+        job.Metadata[PeriodicJobNames.MetadataKey] = name;
+        return job;
+    }
+
+    /// <summary>
+    /// Prepares a run of a stored periodic job, without the unknown-kind check. With a worker for the kind on this node,
+    /// the args go through their type like any insert; otherwise they're inserted as stored.
+    /// </summary>
+    internal JobInsertParams PreparePeriodicRun(string name, string kind, string json, InsertOptions? options)
+    {
+        var now = timeProvider.GetUtcNow();
+        JobInsertParams job;
+        if (workers.Find(kind) is { } registration)
+        {
+            var args = JsonSerializer.Deserialize(json, runtime.Json.GetTypeInfo(registration.ArgsType)) as IJobArgs
+                ?? throw new JsonException($"Args of periodic job '{name}' deserialized to null.");
+            job = Prepare(args, options, now, checkKinds: false);
+        }
+        else
+        {
+            job = Prepare(new RawJobArgs(kind, json), kind, json, typeInfo: null, argsDefaults: null, options, now);
+        }
+
+        job.Metadata[PeriodicJobNames.MetadataKey] = name;
+        return job;
+    }
+
+    public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        IJobArgs args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var argsType = args.GetType();
+        var json = JsonSerializer.Serialize(args, runtime.Json.GetTypeInfo(argsType));
+        return UpsertPeriodicJobCoreAsync(name, schedule, JobKinds.Get(argsType).Kind, json, options, cancellationToken);
+    }
+
+    public Task<PeriodicJobRow> UpsertPeriodicJobAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        JsonElement args,
+        InsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(kind) || kind.Length >= 128)
+        {
+            throw new ArgumentException($"Job kind '{kind}' must be 1 to 127 characters and not blank.", nameof(kind));
+        }
+
+        if (args.ValueKind == JsonValueKind.Undefined)
+        {
+            throw new ArgumentException("Args must be a JSON value.", nameof(args));
+        }
+
+        return UpsertPeriodicJobCoreAsync(name, schedule, kind, args.GetRawText(), options, cancellationToken);
+    }
+
+    private async Task<PeriodicJobRow> UpsertPeriodicJobCoreAsync(
+        string name,
+        PeriodicSchedule schedule,
+        string kind,
+        string json,
+        InsertOptions? options,
+        CancellationToken cancellationToken)
+    {
+        ValidatePeriodicJobName(name);
+        ArgumentNullException.ThrowIfNull(schedule);
+        if (options?.ScheduledAt is not null)
+        {
+            throw new ArgumentException("A periodic job's options can't set ScheduledAt; each run is scheduled by the schedule.", nameof(options));
+        }
+
+        // Stored by ID, so the leader must be able to find it again.
+        if (schedule.TimeZone is { } timeZone && !TimeZoneInfo.TryFindSystemTimeZoneById(timeZone.Id, out _))
+        {
+            throw new ArgumentException($"Time zone '{timeZone.Id}' isn't a system time zone, so it can't be stored.", nameof(schedule));
+        }
+
+        CheckKind(kind);
+        try
+        {
+            // Fails now on anything that would fail every run: options, and args a local worker can't read.
+            PreparePeriodicRun(name, kind, json, options);
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException($"The args don't deserialize to the args type of kind '{kind}': {ex.Message}", ex);
+        }
+
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobUpsert);
+        PeriodicJobRow? row;
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            command.Parameters.AddWithValue("kind", kind);
+            command.Parameters.AddWithValue("args", json);
+            command.Parameters.Add(Text("options", options is null
+                ? null
+                : JsonSerializer.Serialize(options, PeriodicJsonContext.Default.InsertOptions)));
+            AddSchedule(command, schedule);
+            command.Parameters.Add(Timestamp("next_run_at", schedule.GetNextOccurrence(timeProvider.GetUtcNow())));
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            row = rows.Count == 0 ? null : rows[0];
+        }
+
+        if (row is null)
+        {
+            throw new InvalidOperationException(
+                $"Periodic job '{name}' is registered in code, so it can't be replaced at runtime. Choose another name.");
+        }
+
+        await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        return row;
+    }
+
+    public Task<PeriodicJobRow?> PausePeriodicJobAsync(string name, CancellationToken cancellationToken = default) =>
+        ChangePeriodicJobAsync(runtime.Sql.PeriodicJobPause, name, cancellationToken);
+
+    public async Task<PeriodicJobRow?> ResumePeriodicJobAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ValidatePeriodicJobName(name);
+        PeriodicJobRow? row;
         var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using (connection.ConfigureAwait(false))
         {
             var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
             await using (transaction.ConfigureAwait(false))
             {
-                await InsertPreparedAsync(connection, transaction, jobs, cancellationToken).ConfigureAwait(false);
+                var select = new NpgsqlCommand(runtime.Sql.PeriodicJobLock, connection, transaction);
+                await using (select.ConfigureAwait(false))
+                {
+                    select.Parameters.AddWithValue("name", name);
+                    var rows = await PeriodicJobRowReader.ReadAllAsync(select, cancellationToken).ConfigureAwait(false);
+                    if (rows.Count == 0 || rows[0].PausedAt is null)
+                    {
+                        return rows.Count == 0 ? null : rows[0];
+                    }
+
+                    row = rows[0];
+                }
+
+                var update = new NpgsqlCommand(runtime.Sql.PeriodicJobResume, connection, transaction);
+                await using (update.ConfigureAwait(false))
+                {
+                    update.Parameters.AddWithValue("name", name);
+                    update.Parameters.Add(Timestamp("next_run_at", row.Schedule.GetNextOccurrence(timeProvider.GetUtcNow())));
+                    row = (await PeriodicJobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))[0];
+                }
+
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        return row;
+    }
+
+    public Task<PeriodicJobRow?> DeletePeriodicJobAsync(string name, CancellationToken cancellationToken = default) =>
+        ChangePeriodicJobAsync(runtime.Sql.PeriodicJobDelete, name, cancellationToken);
+
+    public async Task<PeriodicJobRow?> GetPeriodicJobAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ValidatePeriodicJobName(name);
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobGet);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            return rows.Count == 0 ? null : rows[0];
+        }
+    }
+
+    public async Task<IReadOnlyList<PeriodicJobRow>> ListPeriodicJobsAsync(CancellationToken cancellationToken = default)
+    {
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.PeriodicJobList);
+        await using (command.ConfigureAwait(false))
+        {
+            return await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<PeriodicJobRow?> ChangePeriodicJobAsync(string sql, string name, CancellationToken cancellationToken)
+    {
+        ValidatePeriodicJobName(name);
+        PeriodicJobRow? row;
+        var command = runtime.DataSource.CreateCommand(sql);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("name", name);
+            var rows = await PeriodicJobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
+            row = rows.Count == 0 ? null : rows[0];
+        }
+
+        if (row is not null)
+        {
+            await NotifyPeriodicJobChangedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return row;
+    }
+
+    /// <summary>Wakes the leader's periodic enqueuer; without it, the change is seen within a scheduler interval.</summary>
+    private async Task NotifyPeriodicJobChangedAsync(CancellationToken cancellationToken)
+    {
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.Notify);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
+            command.Parameters.Add(TextArray("payloads", [JsonSerializer.Serialize(
+                new ControlPayload(ControlPayload.PeriodicJobChanged, null, null, null),
+                OxbowJsonContext.Default.ControlPayload)]));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    internal static void AddSchedule(NpgsqlCommand command, PeriodicSchedule schedule)
+    {
+        command.Parameters.Add(Text("cron", schedule.Expression));
+        command.Parameters.Add(Text("time_zone", schedule.TimeZone?.Id));
+        command.Parameters.Add(new NpgsqlParameter("every_seconds", NpgsqlDbType.Double)
+        {
+            Value = schedule.Interval is { } interval ? interval.TotalSeconds : DBNull.Value,
+        });
+    }
+
+    internal static NpgsqlParameter Timestamp(string name, DateTimeOffset? value) =>
+        new(name, NpgsqlDbType.TimestampTz) { Value = value is { } at ? at.UtcDateTime : DBNull.Value };
+
+    private static NpgsqlParameter Text(string name, string? value) =>
+        new(name, NpgsqlDbType.Text) { Value = (object?)value ?? DBNull.Value };
+
+    private static void ValidatePeriodicJobName(string name)
+    {
+        if (!PeriodicJobNames.IsValid(name))
+        {
+            throw new ArgumentException($"Periodic job name '{name}' must be 1 to 255 characters and not blank.", nameof(name));
         }
     }
 
@@ -302,15 +534,35 @@ internal sealed partial class OxbowClient(
     {
         var argsType = args.GetType();
         var kind = JobKinds.Get(argsType).Kind;
-        if (checkKinds && !workers.IsEmpty && !runtime.Options.SkipUnknownKindCheck && workers.Find(kind) is null)
+        if (checkKinds)
+        {
+            CheckKind(kind);
+        }
+
+        var typeInfo = runtime.Json.GetTypeInfo(argsType);
+        return Prepare(args, kind, JsonSerializer.Serialize(args, typeInfo), typeInfo, args.GetInsertOptions(), options, now);
+    }
+
+    private void CheckKind(string kind)
+    {
+        if (!workers.IsEmpty && !runtime.Options.SkipUnknownKindCheck && workers.Find(kind) is null)
         {
             throw new InvalidOperationException(
                 $"Job kind '{kind}' has no worker registered on this client. Register one with AddWorker, or set " +
                 "OxbowOptions.SkipUnknownKindCheck if another service works it.");
         }
+    }
 
-        var argsDefaults = args.GetInsertOptions();
-        var typeInfo = runtime.Json.GetTypeInfo(argsType);
+    // A null typeInfo means raw args, which are unique by the whole object.
+    private JobInsertParams Prepare(
+        IJobArgs args,
+        string kind,
+        string encodedArgs,
+        JsonTypeInfo? typeInfo,
+        InsertOptions? argsDefaults,
+        InsertOptions? options,
+        DateTimeOffset now)
+    {
         var job = new JobInsertParams(args, kind)
         {
             Queue = options?.Queue ?? argsDefaults?.Queue ?? "default",
@@ -349,7 +601,7 @@ internal sealed partial class OxbowClient(
         }
 
         job.Scheduled = job.ScheduledAt > now;
-        job.EncodedArgs = JsonSerializer.Serialize(args, typeInfo);
+        job.EncodedArgs = encodedArgs;
 
         var unique = options?.Unique ?? argsDefaults?.Unique;
         if (unique is not null && !UniqueKeys.IsEmpty(unique))
@@ -362,7 +614,7 @@ internal sealed partial class OxbowClient(
         return job;
     }
 
-    private Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
+    internal Task<IReadOnlyList<InsertResult>> InsertPreparedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         List<JobInsertParams> jobs,
