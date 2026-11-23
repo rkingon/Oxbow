@@ -270,10 +270,17 @@ internal sealed partial class OxbowClient(
                 "The filter matches every job. Set a filter, or set JobFilter.All to act on every job.", nameof(filter));
         }
 
+        long until;
+        var max = runtime.DataSource.CreateCommand(runtime.Sql.MaxJobId);
+        await using (max.ConfigureAwait(false))
+        {
+            until = (long)(await max.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        }
+
         long after = 0, affected = 0, other = 0;
         while (true)
         {
-            var batch = await ManyBatchAsync(template, filter, after, cancellationToken).ConfigureAwait(false);
+            var batch = await ManyBatchAsync(template, filter, after, until, cancellationToken).ConfigureAwait(false);
             affected += batch.Affected;
             other += batch.Other;
             if (batch.Scanned < BulkBatchSize)
@@ -289,6 +296,7 @@ internal sealed partial class OxbowClient(
         string template,
         JobFilter filter,
         long after,
+        long until,
         CancellationToken cancellationToken)
     {
         for (var attempt = 1; ; attempt++)
@@ -301,6 +309,7 @@ internal sealed partial class OxbowClient(
                     template,
                     JobFilterSql.Where(filter, runtime.Sql.StateTypeName, command.Parameters));
                 command.Parameters.AddWithValue("after", after);
+                command.Parameters.AddWithValue("until", until);
                 command.Parameters.AddWithValue("limit", BulkBatchSize);
                 command.Parameters.AddWithValue("channel", runtime.Sql.ControlChannel);
                 try
@@ -317,8 +326,10 @@ internal sealed partial class OxbowClient(
                     }
                 }
 
-                // Batches lock in ID order but the completer doesn't, so the two can deadlock on running jobs.
-                catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.DeadlockDetected && attempt < 3)
+                // Batches lock in ID order but the completer doesn't, so the two can deadlock on running jobs. A unique
+                // violation means a bulk retry raced a newly committed holder of a key, which the rerun skips.
+                catch (PostgresException ex) when (
+                    (ex.SqlState is PostgresErrorCodes.DeadlockDetected or PostgresErrorCodes.UniqueViolation) && attempt < 3)
                 {
                 }
             }

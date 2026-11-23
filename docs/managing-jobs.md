@@ -46,6 +46,7 @@ would take a unique key another live job holds skips that job, where `RetryAsync
 - **Batches.** Jobs are processed 1,000 at a time in ID order, one statement per batch, each committed on its own. No
   transaction holds locks on the whole set, and producers' fetches skip a batch's locked rows rather than wait. If the
   operation fails or is cancelled part-way, earlier batches stay done; running it again is safe.
-- **Concurrent inserts.** Jobs inserted while an operation runs may or may not be included.
+- **Concurrent inserts.** An operation only considers jobs up to the highest ID when it started, so a stream of
+  matching inserts can't keep it running. Jobs inserted while it runs may or may not be included.
 - **Results.** Counts, not rows, since a set can be millions of jobs: `CancelManyResult`, `RetryManyResult` and a
   `long` for deletes. List with the same filters to see the jobs.

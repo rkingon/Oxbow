@@ -146,6 +146,61 @@ public sealed class BulkTests(PostgresFixture database)
         Assert.Equal(new RetryManyResult(0, 2), await app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] }));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Retry_many_skips_a_unique_key_taken_by_an_insert_that_commits_while_it_runs(bool commit)
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var discarded = (await app.Client.InsertAsync(new UniqueArgs("c1", "t"), new InsertOptions { Queue = "idle" })).Job.Id;
+        await SetStateAsync(prefix, discarded, "discarded", "finalized_at = now()");
+
+        await using var connection = await app.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await app.Client.InsertAsync(connection, transaction, new UniqueArgs("c1", "t"), new InsertOptions { Queue = "idle" });
+
+        // Blocks on the unique index until the insert's transaction ends.
+        var retry = app.Client.RetryManyAsync(new JobFilter { Kinds = ["unique"], States = [JobState.Discarded] });
+        await Task.Delay(500);
+        Assert.False(retry.IsCompleted);
+        if (commit)
+        {
+            await transaction.CommitAsync();
+        }
+        else
+        {
+            await transaction.RollbackAsync();
+        }
+
+        Assert.Equal(commit ? new RetryManyResult(0, 1) : new RetryManyResult(1, 0), await retry);
+        Assert.Equal(commit ? JobState.Discarded : JobState.Available, (await app.Client.GetAsync(discarded))!.State);
+    }
+
+    [Fact]
+    public async Task Bulk_operations_stop_at_the_highest_id_when_they_started()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        await app.Client.InsertManyFastAsync(Enumerable.Range(0, 1_500).Select(i => new InsertManyItem(new RecordArgs($"{i}"), Idle("acme"))));
+
+        // Holds the first batch's last row so the late jobs commit before the second batch reads.
+        await using var connection = await app.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var hold = new Npgsql.NpgsqlCommand($"SELECT id FROM {prefix}job ORDER BY id OFFSET 999 LIMIT 1 FOR UPDATE", connection, transaction))
+        {
+            await hold.ExecuteNonQueryAsync();
+        }
+
+        var cancel = app.Client.CancelManyAsync(new JobFilter { Metadata = new JsonObject { ["tenant"] = "acme" } });
+        await Task.Delay(500);
+        await app.Client.InsertManyFastAsync(Enumerable.Range(0, 10).Select(i => new InsertManyItem(new RecordArgs($"late-{i}"), Idle("acme"))));
+        await transaction.CommitAsync();
+
+        Assert.Equal(new CancelManyResult(1_500, 0), await cancel);
+        Assert.Equal(10, await CountAsync(prefix, "state = 'available'"));
+    }
+
     [Fact]
     public async Task Delete_many_skips_running_jobs()
     {

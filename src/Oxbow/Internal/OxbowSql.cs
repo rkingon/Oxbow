@@ -222,7 +222,8 @@ internal sealed class OxbowSql
             LIMIT @limit
             """;
 
-        // The bulk operations run one batch per statement, walking IDs upward from @after. Each returns scanned, last_id,
+        // The bulk operations run one batch per statement, walking IDs upward from @after to @until, the highest ID when
+        // the operation started, so a stream of matching inserts can't keep it going. Each returns scanned, last_id,
         // affected, then cancel requests or skipped unique conflicts. Rows are locked in ID order and waited for rather
         // than skipped, so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
         CancelManyTemplate = $"""
@@ -231,6 +232,7 @@ internal sealed class OxbowSql
                 FROM {job}
                 WHERE {"{0}"}
                   AND id > @after
+                  AND id <= @until
                   AND state NOT IN ('cancelled', 'completed', 'discarded')
                   AND finalized_at IS NULL
                 ORDER BY id
@@ -268,13 +270,15 @@ internal sealed class OxbowSql
             """;
 
         // A job that would take a unique key another live job holds is skipped (RetryAsync would throw instead), as are
-        // all but the lowest ID of batch rows that would take the same key.
+        // all but the lowest ID of batch rows that would take the same key. A holder committed after the statement's
+        // snapshot still raises a unique violation; the client reruns the batch, whose new snapshot sees it.
         RetryManyTemplate = $"""
             WITH locked AS (
                 SELECT id, state, unique_key, unique_states
                 FROM {job}
                 WHERE {"{0}"}
                   AND id > @after
+                  AND id <= @until
                   AND state <> 'running'
                   AND NOT (state = 'available' AND scheduled_at < now())
                 ORDER BY id
@@ -326,6 +330,7 @@ internal sealed class OxbowSql
                 FROM {job}
                 WHERE {"{0}"}
                   AND id > @after
+                  AND id <= @until
                   AND state <> 'running'
                 ORDER BY id
                 LIMIT @limit
@@ -343,6 +348,8 @@ internal sealed class OxbowSql
                 (SELECT count(*) FROM deleted),
                 0::bigint
             """;
+
+        MaxJobId = $"SELECT coalesce(max(id), 0) FROM {job}";
 
         GetCancelRequested = $"""
             SELECT id FROM {job}
@@ -560,6 +567,8 @@ internal sealed class OxbowSql
 
     /// <summary>Format with the <see cref="JobFilterSql"/> clause.</summary>
     public string DeleteManyTemplate { get; }
+
+    public string MaxJobId { get; }
 
     public string GetCancelRequested { get; }
 
