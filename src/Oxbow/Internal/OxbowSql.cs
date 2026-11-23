@@ -222,9 +222,9 @@ internal sealed class OxbowSql
             LIMIT @limit
             """;
 
-        // The bulk operations run one batch per statement, walking IDs upward from @after, and each returns
-        // (scanned, last_id, affected, and cancel requests or unique conflicts skipped). Rows are locked in ID order and waited for rather than skipped,
-        // so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
+        // The bulk operations run one batch per statement, walking IDs upward from @after. Each returns scanned, last_id,
+        // affected, then cancel requests or skipped unique conflicts. Rows are locked in ID order and waited for rather
+        // than skipped, so a job mid-fetch isn't missed; fetches use SKIP LOCKED, so they're never blocked by a batch.
         CancelManyTemplate = $"""
             WITH locked AS (
                 SELECT id

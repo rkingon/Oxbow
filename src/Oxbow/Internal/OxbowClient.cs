@@ -208,7 +208,7 @@ internal sealed partial class OxbowClient(
 
     public async Task<JobListResult> ListAsync(JobListQuery query, CancellationToken cancellationToken = default)
     {
-        JobFilterSql.Validate(query, nameof(query));
+        ArgumentNullException.ThrowIfNull(query);
         ArgumentOutOfRangeException.ThrowIfLessThan(query.Limit, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(query.Limit, 10_000);
 
@@ -256,7 +256,7 @@ internal sealed partial class OxbowClient(
 
     private async Task<(long Affected, long Other)> ManyAsync(string template, JobFilter filter, CancellationToken cancellationToken)
     {
-        JobFilterSql.Validate(filter, nameof(filter));
+        ArgumentNullException.ThrowIfNull(filter);
         if (filter is JobListQuery)
         {
             throw new ArgumentException(

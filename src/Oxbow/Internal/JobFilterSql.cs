@@ -16,17 +16,6 @@ internal static class JobFilterSql
         && (filter.Metadata is null || filter.Metadata.Count == 0)
         && (filter.Tags is null || filter.Tags.Count == 0);
 
-    public static void Validate(JobFilter filter, string paramName)
-    {
-        ArgumentNullException.ThrowIfNull(filter, paramName);
-        if ((filter.Queues?.Any(q => q is null) ?? false)
-            || (filter.Kinds?.Any(k => k is null) ?? false)
-            || (filter.Tags?.Any(t => t is null) ?? false))
-        {
-            throw new ArgumentException("Queues, kinds and tags can't contain null.", paramName);
-        }
-    }
-
     /// <summary>The clause, with its parameters added to <paramref name="parameters"/>.</summary>
     public static string Where(JobFilter filter, string stateTypeName, NpgsqlParameterCollection parameters)
     {
