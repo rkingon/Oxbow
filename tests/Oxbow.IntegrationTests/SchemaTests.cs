@@ -13,7 +13,7 @@ public sealed class SchemaTests(PostgresFixture database)
             await database.ExecuteAsOwnerAsync(migration.Sql);
         }
 
-        Assert.Equal(1, await database.ScalarAsOwnerAsync<int>($"SELECT max(version) FROM public.{prefix}migration"));
+        Assert.Equal(OxbowSchema.LatestVersion, await database.ScalarAsOwnerAsync<int>($"SELECT max(version) FROM public.{prefix}migration"));
 
         foreach (var migration in OxbowSchema.GetMigrations(OxbowSchema.LatestVersion, 0, tablePrefix: prefix))
         {
@@ -26,6 +26,31 @@ public sealed class SchemaTests(PostgresFixture database)
                  + (SELECT count(*) FROM pg_proc WHERE proname LIKE '{prefix}%')
             """);
         Assert.Equal(0, remaining);
+    }
+
+    [Fact]
+    public async Task Each_version_upgrades_from_the_previous_one_and_back()
+    {
+        const string prefix = "upgrade_";
+        for (var version = 1; version <= OxbowSchema.LatestVersion; version++)
+        {
+            foreach (var migration in OxbowSchema.GetMigrations(version - 1, version, tablePrefix: prefix))
+            {
+                await database.ExecuteAsOwnerAsync(migration.Sql);
+            }
+
+            Assert.Equal(version, await database.ScalarAsOwnerAsync<int>($"SELECT max(version) FROM public.{prefix}migration"));
+        }
+
+        for (var version = OxbowSchema.LatestVersion; version >= 1; version--)
+        {
+            foreach (var migration in OxbowSchema.GetMigrations(version, version - 1, tablePrefix: prefix))
+            {
+                await database.ExecuteAsOwnerAsync(migration.Sql);
+            }
+        }
+
+        Assert.Equal(0L, await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM pg_class WHERE relname LIKE '{prefix}%'"));
     }
 
     [Fact]
@@ -44,7 +69,7 @@ public sealed class SchemaTests(PostgresFixture database)
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             TestApp.StartAsync(database, "missing_", register: b => b.AddWorker<RecordArgs, RecordWorker>()));
-        Assert.Contains("OxbowSchema.GetMigrations(0, 1)", ex.Message, StringComparison.Ordinal);
+        Assert.Contains($"OxbowSchema.GetMigrations(0, {OxbowSchema.LatestVersion})", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

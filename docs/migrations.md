@@ -26,18 +26,21 @@ One EF migration per Oxbow schema version:
 ```csharp
 protected override void Up(MigrationBuilder migrationBuilder)
 {
-    migrationBuilder.AddOxbowSchema(version: 1);
+    migrationBuilder.AddOxbowSchema(version: 2);
     migrationBuilder.GrantOxbowAccess("app_role");
 }
 
-protected override void Down(MigrationBuilder migrationBuilder) => migrationBuilder.RemoveOxbowSchema(version: 1);
+protected override void Down(MigrationBuilder migrationBuilder) => migrationBuilder.RemoveOxbowSchema(version: 2);
 ```
+
+Upgrading from 1 to 2 is a new EF migration with `AddOxbowSchema(version: 2)` and `GrantOxbowAccess` again, since
+version 2 adds objects the runtime role needs.
 
 ## CLI
 
 ```shell
 dotnet tool install --global Oxbow.Cli --prerelease
-oxbow sql --from 0 --to 1 > oxbow_v1.sql
+oxbow sql --from 0 --to 2 > oxbow.sql
 OXBOW_CONNECTION_STRING="Host=...;Username=owner;..." oxbow migrate
 ```
 

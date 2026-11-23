@@ -9,7 +9,7 @@ namespace Oxbow;
 public static class OxbowSchema
 {
     /// <summary>The schema version this release requires.</summary>
-    public const int LatestVersion = 1;
+    public const int LatestVersion = 2;
 
     /// <summary>
     /// The SQL to move the schema from <paramref name="fromVersion"/> to <paramref name="toVersion"/>, one script per
@@ -66,6 +66,7 @@ public static class OxbowSchema
     private static string ScriptName(int version, string direction) => version switch
     {
         1 => $"001_initial.{direction}.sql",
+        2 => $"002_v2.{direction}.sql",
         _ => throw new ArgumentOutOfRangeException(nameof(version), version.ToString(CultureInfo.InvariantCulture)),
     };
 

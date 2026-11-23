@@ -1,1 +1,5 @@
 #nullable enable
+*REMOVED*const Oxbow.OxbowSchema.LatestVersion = 1 -> int
+*REMOVED*static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 1, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
+const Oxbow.OxbowSchema.LatestVersion = 2 -> int
+static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
