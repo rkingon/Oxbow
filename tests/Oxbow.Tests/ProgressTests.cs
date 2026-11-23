@@ -44,6 +44,15 @@ public sealed class ProgressTests
     }
 
     [Fact]
+    public async Task A_progress_message_over_1000_characters_throws()
+    {
+        var job = new Job<Import>(Row("{}"), new Import(1));
+        await job.ReportProgressAsync(1, new string('x', 1_000));
+        await Assert.ThrowsAsync<ArgumentException>(() => job.ReportProgressAsync(2, new string('x', 1_001)));
+        Assert.Equal(1, job.Progress!.Percent);
+    }
+
+    [Fact]
     public void Heartbeat_and_progress_are_read_from_metadata()
     {
         var row = Row("""

@@ -22,7 +22,8 @@ A job is a candidate once the later of its `attempted_at` and its last [heartbea
 is older than `RescueStuckJobsAfter`. Then:
 
 - If a cancel was requested, it's cancelled.
-- If the attempt has heartbeated, it's rescued: it promised heartbeats and stopped sending them.
+- If the attempt has heartbeated, it's rescued, regardless of its timeout (even `Timeout.InfiniteTimeSpan`): it
+  promised heartbeats and stopped sending them for `RescueStuckJobsAfter`.
 - Otherwise, if the leader has a worker for the kind, it's left alone while it may legitimately still be running: with
   no timeout (`Timeout.InfiniteTimeSpan`), or within its timeout counted from `attempted_at`.
 - Anything else is retried with backoff, or discarded when out of attempts.

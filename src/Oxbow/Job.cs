@@ -8,6 +8,8 @@ namespace Oxbow;
 public sealed class Job<TArgs>
     where TArgs : IJobArgs
 {
+    private const int MaxProgressMessageLength = 1_000;
+
     /// <summary>Creates a job, for example to unit test a worker.</summary>
     /// <param name="row">The stored row.</param>
     /// <param name="args">The deserialized args.</param>
@@ -72,7 +74,7 @@ public sealed class Job<TArgs>
     /// <see cref="Progress"/> is updated.
     /// </summary>
     /// <param name="percent">How far along the work is, from 0 to 100.</param>
-    /// <param name="message">A description of the current step.</param>
+    /// <param name="message">A description of the current step, at most 1,000 characters.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>A task that completes when the progress is written.</returns>
     public Task ReportProgressAsync(double percent, string? message = null, CancellationToken cancellationToken = default)
@@ -80,6 +82,11 @@ public sealed class Job<TArgs>
         if (!double.IsFinite(percent) || percent is < 0 or > 100)
         {
             throw new ArgumentOutOfRangeException(nameof(percent), percent, "Progress must be between 0 and 100.");
+        }
+
+        if (message?.Length > MaxProgressMessageLength)
+        {
+            throw new ArgumentException($"A progress message may be at most {MaxProgressMessageLength} characters.", nameof(message));
         }
 
         Progress = new JobProgress(percent, message, Attempt, Control?.Now ?? DateTimeOffset.UtcNow);

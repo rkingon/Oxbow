@@ -63,8 +63,8 @@ public async Task WorkAsync(Job<ImportCsv> job, CancellationToken cancellationTo
 - `job.HeartbeatAsync()` records that the attempt is alive, as `oxbow:heartbeat_at` in metadata. It's throttled:
   calls within a tenth of `RescueStuckJobsAfter` (30 s at most) of the last write do nothing, so call it as often as
   is convenient.
-- `job.ReportProgressAsync(percent, message)` writes `oxbow:progress` (`percent` 0–100, `message`, `attempt`, `at`)
-  and counts as a heartbeat. It isn't throttled; every call is a write to the job's row, so report at a sensible
+- `job.ReportProgressAsync(percent, message)` writes `oxbow:progress` (`percent` 0–100, `message` of at most 1,000
+  characters, `attempt`, `at`) and counts as a heartbeat; out-of-range values throw. It isn't throttled; every call is a write to the job's row, so report at a sensible
   cadence.
 - Read them with `GetAsync` or `ListAsync`: `JobRow.Progress` and `JobRow.HeartbeatAt`. `job.Progress` is what this
   attempt last reported.

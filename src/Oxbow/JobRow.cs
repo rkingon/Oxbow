@@ -61,7 +61,7 @@ public sealed class JobRow
     /// </summary>
     public DateTimeOffset? HeartbeatAt =>
         Metadata.ValueKind == JsonValueKind.Object
-        && Metadata.TryGetProperty(MetadataKeys.HeartbeatAt, out var value)
+        && Metadata.TryGetProperty("oxbow:heartbeat_at", out var value)
         && value.ValueKind == JsonValueKind.String
         && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
             ? at
@@ -76,7 +76,7 @@ public sealed class JobRow
         get
         {
             if (Metadata.ValueKind != JsonValueKind.Object
-                || !Metadata.TryGetProperty(MetadataKeys.Progress, out var value)
+                || !Metadata.TryGetProperty("oxbow:progress", out var value)
                 || value.ValueKind != JsonValueKind.Object)
             {
                 return null;
