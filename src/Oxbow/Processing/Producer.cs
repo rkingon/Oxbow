@@ -93,7 +93,7 @@ internal sealed class Producer(
             EveryAsync(CancelPollInterval, PollCancellationsAsync, pollSource.Token),
             EveryAsync(QueueRefreshInterval, async ct => _paused = await UpsertQueueAsync(ct).ConfigureAwait(false), pollSource.Token));
 
-        using var rateTimer = _limits is { Rate: not null } or { PartitionRate: not null }
+        using var rateTimer = _limits is { Rated: true }
             ? timeProvider.CreateTimer(_ => TriggerFetch(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan)
             : null;
 
@@ -350,8 +350,7 @@ internal sealed class Producer(
         AddRateParameters(p, limits);
         batch.BatchCommands.Add(fetch);
 
-        var rated = limits.Rate is not null || limits.PartitionRate is not null;
-        if (rated)
+        if (limits.Rated)
         {
             var wait = new NpgsqlBatchCommand(sql.RateLimitWait);
             wait.Parameters.AddWithValue("queue", queue);
@@ -369,7 +368,7 @@ internal sealed class Producer(
                 rows.Add(JobRowReader.Read(reader));
             }
 
-            if (rated && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false)
+            if (limits.Rated && await reader.NextResultAsync(cancellationToken).ConfigureAwait(false)
                 && await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 rateWait = reader.IsDBNull(0) ? null : TimeSpan.FromSeconds(reader.GetDouble(0));
@@ -496,7 +495,9 @@ internal sealed class Producer(
 internal sealed record FetchLimits(ConcurrencyLimit? Concurrency, RateLimit? Rate = null, RateLimit? PartitionRate = null)
 {
     /// <summary>Whether fetches must be serialized behind the queue lock: limits that span nodes need it.</summary>
-    public bool Serialized => Concurrency?.Global is not null || Rate is not null || PartitionRate is not null;
+    public bool Serialized => Concurrency?.Global is not null || Rated;
+
+    public bool Rated => Rate is not null || PartitionRate is not null;
 
     public static FetchLimits? For(QueueOptions options)
     {

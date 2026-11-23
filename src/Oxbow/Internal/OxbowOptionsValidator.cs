@@ -89,9 +89,9 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
         {
             failures.Add($"Queue '{queue}': {name}.Limit and Burst must be at least 1.");
         }
-        else if (limit.Period <= TimeSpan.Zero || limit.Period > TimeSpan.FromDays(365))
+        else if (limit.Period <= TimeSpan.Zero)
         {
-            failures.Add($"Queue '{queue}': {name}.Period must be positive and at most 365 days.");
+            failures.Add($"Queue '{queue}': {name}.Period must be positive.");
         }
         else if (limit.Period.Ticks < limit.Limit * 10L)
         {

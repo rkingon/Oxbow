@@ -15,15 +15,16 @@ Jobs waiting their turn stay `available`: they spend no attempt and aren't snooz
 
 ## Burst
 
-By default starts are evenly spaced at `Period / Limit`, so no window of `Period` sees more than `Limit` of them.
-`Burst` lets up to that many start at once after the queue has been idle, then the rate takes over:
+Starts are evenly spaced by default, so a limit doesn't let jobs start all at once:
 
 ```csharp
-RateLimit = new(100, TimeSpan.FromMinutes(1)) { Burst = 10 },   // 10 at once, then one every 600 ms
+RateLimit = new(100, TimeSpan.FromMinutes(1)),                  // one start every 600 ms, never 100 at once
+RateLimit = new(100, TimeSpan.FromMinutes(1)) { Burst = 10 },   // up to 10 at once after an idle spell, then one every 600 ms
 ```
 
-A window of `Period` that begins with a burst can see up to `Limit + Burst - 1` starts, so leave `Burst` at 1 when an
-external limit is strict.
+With the default `Burst = 1`, no window of `Period` sees more than `Limit` starts. `Burst` lets up to that many start
+at once after the queue has been idle, then the rate takes over. A window of `Period` that begins with a burst can see up
+to `Limit + Burst - 1` starts, so leave `Burst` at 1 when an external limit is strict.
 
 ## Per key
 
