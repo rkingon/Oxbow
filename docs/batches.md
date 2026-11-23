@@ -30,7 +30,9 @@ leader failover, or two leaders briefly overlapping, can't enqueue a callback tw
 - `OnComplete` is enqueued whatever the outcome.
 - `OnSuccess` is enqueued only if every member `completed`: none `discarded`, `cancelled` or deleted.
 - A callback is an ordinary job. It's prepared when the batch is inserted: defaults are resolved, it goes through insert
-  middleware there (with an empty result list, as with `InsertManyFastAsync`), and its unique key is computed then.
+  middleware there (with an empty result list, as with `InsertManyFastAsync`), so tenant and trace metadata reach it.
+  Middleware therefore sees a callback that may never fire, such as `OnSuccess` of a batch that fails. Its unique key
+  is computed then too.
   The leader inserts it as prepared, so the leader needn't have its args type. `ScheduledAt` is an absolute time.
 - `OnComplete` and `OnSuccess` with the same unique key are rejected, since only one could ever be inserted. A callback
   that's skipped as a unique duplicate links the existing job.
@@ -74,7 +76,8 @@ The job cleaner leaves a batch's members alone while the batch row exists, so a 
 deleted while a sibling spends three weeks retrying, and progress and `OnSuccess` stay right. A finished batch is
 deleted after `OxbowOptions.BatchRetention` (24 hours; `Timeout.InfiniteTimeSpan` keeps it), but not while one of its
 callbacks is still unfinished, so a retrying callback can always read its batch. Its members are then cleaned by their
-own retention.
+own retention. In effect, a member is kept for the batch's lifetime plus `BatchRetention`, rather than its own
+retention from when it finished.
 
 ## Upgrading
 
