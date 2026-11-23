@@ -18,6 +18,12 @@ internal sealed class RunningJob(JobRow row) : IDisposable
 
     public Task Task { get; set; } = Task.CompletedTask;
 
+    /// <summary>
+    /// The attempt's outcome as written: the resulting state, or null if the write wasn't confirmed (it failed, or the
+    /// outcome was never queued), in which case the row may still be running.
+    /// </summary>
+    public Task<JobState?> Written { get; set; } = Task.FromResult<JobState?>(null);
+
     public void Cancel()
     {
         try
@@ -113,7 +119,7 @@ internal sealed class JobExecutor(
             workToken.IsCancellationRequested,
             running.RemoteCancelToken.IsCancellationRequested,
             timeoutSource?.IsCancellationRequested == true);
-        var outcome = await ReportAsync(row, unit, error, output, start, now, timeout, cancellation).ConfigureAwait(false);
+        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation).ConfigureAwait(false);
         timeoutSource?.Dispose();
 
         tags.Add("outcome", outcome);
@@ -127,7 +133,7 @@ internal sealed class JobExecutor(
     }
 
     private async Task<string> ReportAsync(
-        JobRow row,
+        RunningJob running,
         WorkUnit? unit,
         Exception? error,
         string? output,
@@ -136,9 +142,10 @@ internal sealed class JobExecutor(
         TimeSpan timeout,
         CancellationSources cancellation)
     {
+        var row = running.Row;
         if (error is null)
         {
-            await completer.EnqueueAsync(new SetStateParams(row.Id, JobState.Completed) { FinalizedAt = now, MetadataUpdates = output })
+            await EnqueueAsync(running, null, new SetStateParams(row.Id, JobState.Completed) { FinalizedAt = now, MetadataUpdates = output })
                 .ConfigureAwait(false);
             return "completed";
         }
@@ -148,7 +155,7 @@ internal sealed class JobExecutor(
             var snoozes = row.Metadata.TryGetProperty("snoozes", out var count) && count.ValueKind == JsonValueKind.Number
                 ? count.GetInt64() + 1
                 : 1;
-            await EnqueueAsync(error, new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
+            await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = now + snooze.Duration,
@@ -160,7 +167,7 @@ internal sealed class JobExecutor(
         if (cancellation.Shutdown && error is OperationCanceledException)
         {
             // Soft stop at shutdown: back to available without spending the attempt.
-            await EnqueueAsync(error, new SetStateParams(row.Id, JobState.Available)
+            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Available)
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = now,
@@ -181,14 +188,14 @@ internal sealed class JobExecutor(
 
         if (error is JobCancelException)
         {
-            await EnqueueAsync(error, new SetStateParams(row.Id, JobState.Cancelled) { Error = attemptError, FinalizedAt = now })
+            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Cancelled) { Error = attemptError, FinalizedAt = now })
                 .ConfigureAwait(false);
             return "cancelled";
         }
 
         if (row.Attempt >= row.MaxAttempts)
         {
-            await EnqueueAsync(error, new SetStateParams(row.Id, JobState.Discarded) { Error = attemptError, FinalizedAt = now })
+            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Discarded) { Error = attemptError, FinalizedAt = now })
                 .ConfigureAwait(false);
             return "discarded";
         }
@@ -200,7 +207,7 @@ internal sealed class JobExecutor(
             nextRetry = _fallbackRetryPolicy.NextRetry(row);
         }
 
-        await EnqueueAsync(error, new SetStateParams(row.Id, StateFor(nextRetry - now, JobState.Retryable))
+        await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(nextRetry - now, JobState.Retryable))
         {
             Error = attemptError,
             ScheduledAt = nextRetry,
@@ -210,11 +217,17 @@ internal sealed class JobExecutor(
         return cancellation.Remote ? "cancelled" : "errored";
     }
 
-    /// <summary>Queues a failed attempt's outcome, and its discard handlers for when it's written. Never waits for the write.</summary>
-    private async ValueTask EnqueueAsync(Exception error, SetStateParams update)
+    /// <summary>
+    /// Queues an attempt's outcome, and a failed one's discard handlers for when it's written. Never waits for the write.
+    /// </summary>
+    private async ValueTask EnqueueAsync(RunningJob running, Exception? error, SetStateParams update)
     {
         var written = await completer.EnqueueAsync(update).ConfigureAwait(false);
-        discardHooks.Observe(written, update.Id, update.State, error);
+        running.Written = written;
+        if (error is not null)
+        {
+            discardHooks.Observe(written, update.Id, update.State, error);
+        }
     }
 
     /// <summary>Within one scheduler interval, a job goes straight to available instead of waiting for the scheduler.</summary>

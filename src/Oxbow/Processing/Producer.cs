@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using NpgsqlTypes;
 using Oxbow.Internal;
 
 namespace Oxbow.Processing;
@@ -18,12 +19,22 @@ internal sealed class Producer(
     private static readonly TimeSpan QueueRefreshInterval = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PendingCancelLifetime = TimeSpan.FromMinutes(1);
 
+    // How many candidates a limited fetch scans per free slot; the extra covers keys that only have room for some.
+    private const int LimitedScanFactor = 4;
+
     private readonly Channel<bool> _wake = Channel.CreateBounded<bool>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
 
     private readonly ConcurrentDictionary<long, RunningJob> _active = new();
     private readonly ConcurrentDictionary<long, DateTimeOffset> _pendingCancels = new();
     private volatile bool _paused;
+
+    private readonly ConcurrencyLimit? _limit =
+        queueOptions.ConcurrencyLimit is { Global: not null } or { Local: not null } ? queueOptions.ConcurrencyLimit : null;
+
+    // Running jobs per partition key, held until each outcome is written, so this node never counts fewer jobs for
+    // a key than the database does. Guarded by itself.
+    private readonly Dictionary<string, int> _keyRunning = new(StringComparer.Ordinal);
 
     public string Queue => queue;
 
@@ -102,7 +113,9 @@ internal sealed class Producer(
                 List<JobRow> jobs;
                 try
                 {
-                    jobs = await FetchAsync(slots, fetchToken).ConfigureAwait(false);
+                    jobs = _limit is null
+                        ? await FetchAsync(slots, fetchToken).ConfigureAwait(false)
+                        : await FetchLimitedAsync(_limit, slots, fetchToken).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!fetchToken.IsCancellationRequested)
                 {
@@ -114,6 +127,13 @@ internal sealed class Producer(
                 foreach (var row in jobs)
                 {
                     Start(row, workToken);
+                }
+
+                // A short limited fetch may have dropped jobs of keys that had room for only some of them; with those
+                // keys now full, the next fetch scans past them.
+                if (_limit is not null && jobs.Count > 0 && jobs.Count < slots)
+                {
+                    TriggerFetch();
                 }
             }
         }
@@ -131,6 +151,15 @@ internal sealed class Producer(
 
     private void Start(JobRow row, CancellationToken workToken)
     {
+        var key = _limit is null ? null : row.PartitionKey;
+        if (key is not null)
+        {
+            lock (_keyRunning)
+            {
+                _keyRunning[key] = _keyRunning.GetValueOrDefault(key) + 1;
+            }
+        }
+
         var running = new RunningJob(row);
         _active[row.Id] = running;
         if (_pendingCancels.TryRemove(row.Id, out _))
@@ -150,9 +179,62 @@ internal sealed class Producer(
                     _active.TryRemove(row.Id, out _);
                     running.Dispose();
                     TriggerFetch();
+                    if (key is not null)
+                    {
+                        _ = ReleaseKeyAsync(key, running, workToken);
+                    }
                 }
             },
             CancellationToken.None);
+    }
+
+    private async Task ReleaseKeyAsync(string key, RunningJob running, CancellationToken cancellationToken)
+    {
+        if (await running.Written.ConfigureAwait(false) is null)
+        {
+            // The row may still be running (until the rescuer moves it), so it keeps its slot until it isn't.
+            try
+            {
+                while (await IsRunningAttemptAsync(running.Row, cancellationToken).ConfigureAwait(false) is not false)
+                {
+                    await Task.Delay(runtime.Options.FetchPollInterval, timeProvider, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+
+        lock (_keyRunning)
+        {
+            if (--_keyRunning[key] == 0)
+            {
+                _keyRunning.Remove(key);
+            }
+        }
+
+        TriggerFetch();
+    }
+
+    /// <summary>Whether the row is still running this attempt; null if that couldn't be checked.</summary>
+    private async Task<bool?> IsRunningAttemptAsync(JobRow row, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.IsRunningAttempt);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("id", row.Id);
+                command.Parameters.AddWithValue("attempted_at", row.AttemptedAt!.Value);
+                return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Log.PollFailed(logger, ex, queue);
+            return null;
+        }
     }
 
     private async Task<List<JobRow>> FetchAsync(int max, CancellationToken cancellationToken)
@@ -165,6 +247,69 @@ internal sealed class Producer(
             command.Parameters.AddWithValue("client_id", runtime.ClientId);
             return await JobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task<List<JobRow>> FetchLimitedAsync(ConcurrencyLimit limit, int max, CancellationToken cancellationToken)
+    {
+        string[] keys;
+        int[] running;
+        lock (_keyRunning)
+        {
+            keys = [.. _keyRunning.Keys];
+            running = [.. _keyRunning.Values];
+        }
+
+        // One round trip and one implicit transaction: the queue lock is held until the fetch commits.
+        var batch = runtime.DataSource.CreateBatch();
+        await using (batch.ConfigureAwait(false))
+        {
+            return await FetchLimitedAsync(batch, runtime.Sql, queue, limit, max, runtime.ClientId, keys, running, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Adds the queue lock (with a global limit) and the limited fetch to <paramref name="batch"/>, and runs it.</summary>
+    internal static async Task<List<JobRow>> FetchLimitedAsync(
+        NpgsqlBatch batch,
+        OxbowSql sql,
+        string queue,
+        ConcurrencyLimit limit,
+        int max,
+        string clientId,
+        string[] localKeys,
+        int[] localRunning,
+        CancellationToken cancellationToken)
+    {
+        if (limit.Global is not null)
+        {
+            var queueLock = new NpgsqlBatchCommand(sql.QueueLock);
+            queueLock.Parameters.AddWithValue("queue", queue);
+            batch.BatchCommands.Add(queueLock);
+        }
+
+        var fetch = new NpgsqlBatchCommand(sql.GetAvailableLimited);
+        var p = fetch.Parameters;
+        p.AddWithValue("queue", queue);
+        p.AddWithValue("max", max);
+        p.AddWithValue("scan", max * LimitedScanFactor);
+        p.AddWithValue("client_id", clientId);
+        p.Add(new NpgsqlParameter("global_limit", NpgsqlDbType.Integer) { Value = (object?)limit.Global ?? DBNull.Value });
+        p.Add(new NpgsqlParameter("local_limit", NpgsqlDbType.Integer) { Value = (object?)limit.Local ?? DBNull.Value });
+        p.Add(OxbowClient.TextArray("local_keys", localKeys));
+        p.Add(new NpgsqlParameter<int[]>("local_running", localRunning));
+        batch.BatchCommands.Add(fetch);
+
+        var rows = new List<JobRow>();
+        var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using (reader.ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rows.Add(JobRowReader.Read(reader));
+            }
+        }
+
+        return rows;
     }
 
     private async Task<bool> UpsertQueueAsync(CancellationToken cancellationToken)

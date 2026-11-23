@@ -48,8 +48,6 @@ ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN batch_id bigint;
 
 CREATE INDEX {{prefix}}job_batch_idx ON {{schema}}.{{prefix}}job USING btree (batch_id, state) WHERE batch_id IS NOT NULL;
 
-INSERT INTO {{schema}}.{{prefix}}migration (version) VALUES (2);
-
 -- sequences
 ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN sequence_key text;
 
@@ -67,3 +65,15 @@ CREATE UNIQUE INDEX {{prefix}}job_sequence_live_idx ON {{schema}}.{{prefix}}job 
 -- Cancelled and discarded jobs, which may halt their sequence.
 CREATE INDEX {{prefix}}job_sequence_failed_idx ON {{schema}}.{{prefix}}job (sequence_key)
     WHERE state IN ('cancelled', 'discarded') AND sequence_key IS NOT NULL;
+
+-- partitioned concurrency limits
+
+-- The partition key that queue concurrency limits apply to. NULL is unlimited.
+ALTER TABLE {{schema}}.{{prefix}}job ADD COLUMN partition_key text
+    CONSTRAINT {{prefix}}job_partition_key_length CHECK (char_length(partition_key) > 0 AND char_length(partition_key) < 256);
+
+-- Running jobs per (queue, key), counted by every limited fetch. Running rows are few, so this stays small.
+CREATE INDEX {{prefix}}job_partition_idx ON {{schema}}.{{prefix}}job USING btree (queue, partition_key)
+    WHERE state = 'running' AND partition_key IS NOT NULL;
+
+INSERT INTO {{schema}}.{{prefix}}migration (version) VALUES (2);

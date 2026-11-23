@@ -139,4 +139,9 @@ public sealed class QueueOptions
 {
     /// <summary>The most jobs this node works at once in the queue. Default 100.</summary>
     public int MaxWorkers { get; set; } = 100;
+
+    /// <summary>
+    /// Per-key limits on running jobs, keyed by <see cref="InsertOptions.PartitionKey"/>. Default: unlimited.
+    /// </summary>
+    public ConcurrencyLimit? ConcurrencyLimit { get; set; }
 }

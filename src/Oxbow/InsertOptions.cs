@@ -37,4 +37,10 @@ public sealed record InsertOptions
     /// <see cref="Oxbow.SequenceContinueOn.None"/>: it halts the sequence.
     /// </summary>
     public SequenceContinueOn? SequenceContinueOn { get; init; }
+
+    /// <summary>
+    /// The partition key for the queue's <see cref="QueueOptions.ConcurrencyLimit"/>, up to 255 characters. Default: the
+    /// args' <see cref="PartitionKeyAttribute"/> properties, or none (unlimited).
+    /// </summary>
+    public string? PartitionKey { get; init; }
 }

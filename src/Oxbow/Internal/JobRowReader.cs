@@ -26,6 +26,7 @@ internal static class JobRowReader
             Queue = reader.GetString(14),
             Tags = reader.GetFieldValue<string[]>(15),
             SequenceKey = reader.IsDBNull(16) ? null : reader.GetString(16),
+            PartitionKey = reader.IsDBNull(17) ? null : reader.GetString(17),
         };
     }
 

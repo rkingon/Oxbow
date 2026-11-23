@@ -12,6 +12,7 @@
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)
 - [Batches](batches.md): callbacks when a group of jobs finishes
 - [Queues](queues.md): concurrency, pause and resume
+- [Concurrency limits](concurrency-limits.md): per-key limits, local and global
 - [Middleware](middleware.md)
 - [Args encryption](encryption.md): at rest, on ASP.NET Core Data Protection
 - [Maintenance and leader election](maintenance.md)

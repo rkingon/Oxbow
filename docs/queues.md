@@ -12,6 +12,8 @@ await oxbow.InsertAsync(new SendEmail(...), new InsertOptions { Queue = "email" 
 
 - Each node works only the queues it configures, up to `MaxWorkers` jobs at a time per queue. Queues are how you route
   work: a node that shouldn't run some jobs doesn't run their queue.
+- `ConcurrencyLimit` caps running jobs per key within a queue, per node or across nodes. See
+  [concurrency limits](concurrency-limits.md).
 - A node with no queues is insert-only: it registers the client and runs nothing else.
 - Within a queue, jobs run by priority (1 first), then `ScheduledAt`, then ID. Fetching uses
   `FOR UPDATE SKIP LOCKED`, so nodes never block each other or double-process a job.

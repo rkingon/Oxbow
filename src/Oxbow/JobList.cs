@@ -23,6 +23,9 @@ public record JobFilter
     /// <summary>Only jobs in this sequence.</summary>
     public string? SequenceKey { get; init; }
 
+    /// <summary>Only jobs with this <see cref="JobRow.PartitionKey"/>.</summary>
+    public string? PartitionKey { get; init; }
+
     /// <summary>
     /// Only jobs whose metadata contains this object (JSON containment, <c>@&gt;</c>): <c>{"tenant": "acme"}</c>
     /// matches any job with that key and value, whatever else its metadata holds.
