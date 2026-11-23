@@ -11,6 +11,7 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Cancel a queued job, or signal a running one on any node through its `CancellationToken`
 - Unique jobs enforced by a unique index: by args, period, queue and state
 - Scheduled and periodic (interval or cron) jobs
+- Batches: insert a group of jobs atomically, with callback jobs when it completes or succeeds
 - Named queues with their own concurrency; pause and resume at runtime
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner

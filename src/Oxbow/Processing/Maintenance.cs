@@ -32,6 +32,8 @@ internal sealed class Maintenance(
                 EveryAsync("rescuer", runtime.Options.RescuerInterval, RescueAsync, cancellationToken),
                 EveryAsync("cleaner", runtime.Options.CleanerInterval, CleanAsync, cancellationToken),
                 EveryAsync("queue-cleaner", QueueCleanerInterval, CleanQueuesAsync, cancellationToken),
+                EveryAsync("batch-finisher", runtime.Options.BatchFinisherInterval, FinishBatchesAsync, cancellationToken, runImmediately: true),
+                EveryAsync("batch-cleaner", runtime.Options.CleanerInterval, CleanBatchesAsync, cancellationToken),
                 EveryAsync("queue-depth", DepthInterval, MeasureDepthAsync, cancellationToken, runImmediately: true),
                 new PeriodicEnqueuer(runtime, client, timeProvider, logger).RunAsync(cancellationToken)).ConfigureAwait(false);
         }
@@ -231,6 +233,93 @@ internal sealed class Maintenance(
         var keepForever = OxbowRuntime.IsInfinite(retention);
         command.Parameters.AddWithValue($"{state}_do_delete", !keepForever);
         command.Parameters.AddWithValue($"{state}_horizon", keepForever ? now : now - retention);
+    }
+
+    internal async Task FinishBatchesAsync(CancellationToken cancellationToken)
+    {
+        var afterId = 0L;
+        while (true)
+        {
+            var candidates = new List<long>();
+            var select = runtime.DataSource.CreateCommand(runtime.Sql.BatchGetFinishable);
+            await using (select.ConfigureAwait(false))
+            {
+                select.Parameters.AddWithValue("after", afterId);
+                select.Parameters.AddWithValue("max", BatchSize);
+                var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                await using (reader.ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        candidates.Add(reader.GetInt64(0));
+                    }
+                }
+            }
+
+            // One statement per batch, so a batch whose callback can't be inserted doesn't hold up the others.
+            var queues = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in candidates)
+            {
+                try
+                {
+                    var finish = runtime.DataSource.CreateCommand(runtime.Sql.BatchFinish);
+                    await using (finish.ConfigureAwait(false))
+                    {
+                        finish.Parameters.AddWithValue("id", id);
+                        var reader = await finish.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                        await using (reader.ConfigureAwait(false))
+                        {
+                            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                            {
+                                if (reader.GetString(1) == "available")
+                                {
+                                    queues.Add(reader.GetString(0));
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (PostgresException ex)
+                {
+                    Log.BatchFinishFailed(logger, ex, id);
+                }
+            }
+
+            if (queues.Count > 0)
+            {
+                await NotifyQueuesAsync(queues, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (candidates.Count < BatchSize)
+            {
+                return;
+            }
+
+            afterId = candidates[^1];
+        }
+    }
+
+    internal async Task CleanBatchesAsync(CancellationToken cancellationToken)
+    {
+        if (OxbowRuntime.IsInfinite(runtime.Options.BatchRetention))
+        {
+            return;
+        }
+
+        var horizon = timeProvider.GetUtcNow() - runtime.Options.BatchRetention;
+        while (true)
+        {
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.BatchDeleteExpired);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("horizon", horizon);
+                command.Parameters.AddWithValue("max", BatchSize);
+                if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) < BatchSize)
+                {
+                    return;
+                }
+            }
+        }
     }
 
     private async Task CleanQueuesAsync(CancellationToken cancellationToken)

@@ -12,6 +12,9 @@ public sealed record JobListQuery
     /// <summary>Only jobs of these kinds.</summary>
     public IReadOnlyList<string>? Kinds { get; init; }
 
+    /// <summary>Only members of this batch.</summary>
+    public long? BatchId { get; init; }
+
     /// <summary>The page size, 1 to 10,000. Default 100.</summary>
     public int Limit { get; init; } = 100;
 

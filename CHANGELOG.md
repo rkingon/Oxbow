@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Batches: `IOxbowClient.InsertBatchAsync` inserts a group of jobs and its batch row in one statement (on your
+  transaction, its own, or a `DbContext`'s), with `OnComplete` and `OnSuccess` callback jobs that the leader enqueues
+  exactly once when the group finishes. `GetBatchAsync` reports progress, `JobRow.BatchId` and
+  `JobListQuery.BatchId` link jobs to their batch, and `OxbowOptions.BatchRetention` (24 hours) sets how long a finished
+  batch is kept. The job cleaner keeps a batch's members while the batch exists.
+
 ### Changed
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and

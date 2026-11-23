@@ -74,6 +74,43 @@ public interface IOxbowClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts a batch of jobs on a connection of its own. The batch and its jobs are written in one statement, so the
+    /// batch is never seen without them. Once every job has finished, the leader enqueues the callbacks in
+    /// <paramref name="options"/>. An empty batch finishes at once and enqueues both.
+    /// </summary>
+    /// <param name="items">The member jobs.</param>
+    /// <param name="options">The callbacks.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch ID and the insert results, in order.</returns>
+    Task<BatchInsertResult> InsertBatchAsync(
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts a batch of jobs on the caller's connection and transaction, so the batch commits or rolls back with the
+    /// caller's data.
+    /// </summary>
+    /// <param name="connection">An open connection.</param>
+    /// <param name="transaction">The transaction to insert in, if any.</param>
+    /// <param name="items">The member jobs.</param>
+    /// <param name="options">The callbacks.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch ID and the insert results, in order.</returns>
+    Task<BatchInsertResult> InsertBatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Gets a batch and its progress.</summary>
+    /// <param name="id">The batch's ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch, or <see langword="null"/> if it doesn't exist or has been cleaned up.</returns>
+    Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cancels a job. A job that hasn't started is cancelled at once and never runs. A running job's worker is
     /// signalled through its cancellation token, on whichever node runs it, and decides whether to stop.
     /// </summary>

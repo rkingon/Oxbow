@@ -176,6 +176,172 @@ internal sealed partial class OxbowClient(
         return count;
     }
 
+    public async Task<BatchInsertResult> InsertBatchAsync(
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var batch = PrepareBatch(items, options);
+        var connection = await runtime.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using (connection.ConfigureAwait(false))
+        {
+            var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            await using (transaction.ConfigureAwait(false))
+            {
+                var result = await InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+        }
+    }
+
+    public Task<BatchInsertResult> InsertBatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateCallerConnection(connection, transaction);
+        var batch = PrepareBatch(items, options);
+        return InsertBatchPreparedAsync(connection, transaction, batch, cancellationToken);
+    }
+
+    public async Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var command = runtime.DataSource.CreateCommand(runtime.Sql.BatchGet);
+        await using (command.ConfigureAwait(false))
+        {
+            command.Parameters.AddWithValue("id", id);
+            var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            await using (reader.ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                return new Batch
+                {
+                    Id = reader.GetInt64(0),
+                    CreatedAt = reader.GetFieldValue<DateTimeOffset>(1),
+                    FinalizedAt = reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+                    Total = reader.GetInt32(3),
+                    Completed = reader.GetInt32(4),
+                    Discarded = reader.GetInt32(5),
+                    Cancelled = reader.GetInt32(6),
+                    OnCompleteJobId = reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                    OnSuccessJobId = reader.IsDBNull(8) ? null : reader.GetInt64(8),
+                };
+            }
+        }
+    }
+
+    private PreparedBatch PrepareBatch(IEnumerable<InsertManyItem> items, BatchOptions? options)
+    {
+        var jobs = Prepare(items, checkKinds: true);
+        var now = timeProvider.GetUtcNow();
+        var onComplete = PrepareCallback(options?.OnComplete, now);
+        var onSuccess = PrepareCallback(options?.OnSuccess, now);
+        if (onComplete?.UniqueKey is { } completeKey && onSuccess?.UniqueKey is { } successKey && completeKey.AsSpan().SequenceEqual(successKey))
+        {
+            throw new ArgumentException("OnComplete and OnSuccess have the same unique key, so only one could ever be inserted.", nameof(options));
+        }
+
+        return new PreparedBatch(jobs, onComplete, onSuccess);
+    }
+
+    private JobInsertParams? PrepareCallback(BatchCallback? callback, DateTimeOffset now)
+    {
+        if (callback is null)
+        {
+            return null;
+        }
+
+        ArgumentNullException.ThrowIfNull(callback.Args);
+        return Prepare(callback.Args, callback.Options, now, checkKinds: true);
+    }
+
+    private async Task<BatchInsertResult> InsertBatchPreparedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        PreparedBatch batch,
+        CancellationToken cancellationToken)
+    {
+        long batchId;
+        var next = new NpgsqlCommand(runtime.Sql.BatchNextId, connection, transaction);
+        await using (next.ConfigureAwait(false))
+        {
+            batchId = (long)(await next.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        }
+
+        foreach (var job in batch.Jobs)
+        {
+            job.Metadata["oxbow:batch_id"] = batchId;
+        }
+
+        // Callbacks go through insert middleware now, in the caller's context, with an empty result list as for COPY;
+        // the leader inserts them later as prepared.
+        List<JobInsertParams> callbacks = [];
+        void AddCallback(JobInsertParams? callback, string name)
+        {
+            if (callback is not null)
+            {
+                callback.Metadata["oxbow:batch_id"] = batchId;
+                callback.Metadata["oxbow:batch_callback"] = name;
+                callbacks.Add(callback);
+            }
+        }
+
+        AddCallback(batch.OnComplete, "complete");
+        AddCallback(batch.OnSuccess, "success");
+        if (callbacks.Count > 0)
+        {
+            await RunInsertPipelineAsync(callbacks, _ => Task.FromResult<IReadOnlyList<InsertResult>>([]), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var insert = new BatchInsert(batchId, CallbackSpec(batch.OnComplete), CallbackSpec(batch.OnSuccess));
+        var results = await RunInsertPipelineAsync(
+            batch.Jobs,
+            context => ExecuteInsertAsync(connection, transaction, context.Jobs, context.CancellationToken, insert),
+            cancellationToken).ConfigureAwait(false);
+        return new BatchInsertResult(batchId, results);
+    }
+
+    private static string? CallbackSpec(JobInsertParams? job)
+    {
+        if (job is null)
+        {
+            return null;
+        }
+
+        ValidateQueueName(job.Queue, allowWildcard: false);
+        var tags = new JsonArray();
+        foreach (var tag in job.Tags)
+        {
+            tags.Add(tag);
+        }
+
+        return new JsonObject
+        {
+            ["kind"] = job.Kind,
+            ["args"] = JsonNode.Parse(job.EncodedArgs!),
+            ["queue"] = job.Queue,
+            ["priority"] = job.Priority,
+            ["max_attempts"] = job.MaxAttempts,
+            ["metadata"] = job.Metadata.DeepClone(),
+            ["tags"] = tags,
+            ["scheduled_at"] = job.ScheduledAt?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'", CultureInfo.InvariantCulture),
+            ["unique_key"] = job.UniqueKey is null ? null : Convert.ToBase64String(job.UniqueKey),
+            ["unique_states"] = job.UniqueStates,
+        }.ToJsonString();
+    }
+
+    private sealed record PreparedBatch(List<JobInsertParams> Jobs, JobInsertParams? OnComplete, JobInsertParams? OnSuccess);
+
+    private sealed record BatchInsert(long Id, string? OnComplete, string? OnSuccess);
+
     /// <summary>Inserts on a connection of its own without the unknown-kind check; used by the periodic enqueuer.</summary>
     internal async Task InsertUncheckedAsync(IEnumerable<InsertManyItem> items, CancellationToken cancellationToken)
     {
@@ -231,6 +397,7 @@ internal sealed partial class OxbowClient(
             command.Parameters.Add(TextArray("queues", query.Queues?.ToArray()));
             command.Parameters.Add(TextArray("kinds", query.Kinds?.ToArray()));
             command.Parameters.Add(new NpgsqlParameter("after", NpgsqlDbType.Bigint) { Value = (object?)after ?? DBNull.Value });
+            command.Parameters.Add(new NpgsqlParameter("batch_id", NpgsqlDbType.Bigint) { Value = (object?)query.BatchId ?? DBNull.Value });
             command.Parameters.AddWithValue("limit", query.Limit);
             var jobs = await JobRowReader.ReadAllAsync(command, cancellationToken).ConfigureAwait(false);
             var nextCursor = jobs.Count == query.Limit
@@ -410,7 +577,8 @@ internal sealed partial class OxbowClient(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         IReadOnlyList<JobInsertParams> jobs,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BatchInsert? batch = null)
     {
         foreach (var job in jobs)
         {
@@ -418,7 +586,7 @@ internal sealed partial class OxbowClient(
         }
 
         var results = new List<InsertResult>(jobs.Count);
-        var command = new NpgsqlCommand(runtime.Sql.InsertMany, connection, transaction);
+        var command = new NpgsqlCommand(batch is null ? runtime.Sql.InsertMany : runtime.Sql.InsertBatch, connection, transaction);
         await using (command.ConfigureAwait(false))
         {
             command.Parameters.Add(TextArray("args", jobs.Select(j => j.EncodedArgs!).ToArray()));
@@ -438,6 +606,12 @@ internal sealed partial class OxbowClient(
                 Value = jobs.Select(j => (object?)j.UniqueKey ?? DBNull.Value).ToArray(),
             });
             command.Parameters.Add(new NpgsqlParameter<int[]>("unique_states", jobs.Select(j => j.UniqueStates).ToArray()));
+            command.Parameters.Add(new NpgsqlParameter("batch_id", NpgsqlDbType.Bigint) { Value = (object?)batch?.Id ?? DBNull.Value });
+            if (batch is not null)
+            {
+                command.Parameters.Add(new NpgsqlParameter("on_complete", NpgsqlDbType.Text) { Value = (object?)batch.OnComplete ?? DBNull.Value });
+                command.Parameters.Add(new NpgsqlParameter("on_success", NpgsqlDbType.Text) { Value = (object?)batch.OnSuccess ?? DBNull.Value });
+            }
 
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))

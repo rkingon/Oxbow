@@ -42,6 +42,7 @@ internal sealed class OxbowOptionsValidator : IValidateOptions<OxbowOptions>
         RequirePositiveOrInfinite(failures, nameof(options.CompletedJobRetention), options.CompletedJobRetention);
         RequirePositiveOrInfinite(failures, nameof(options.CancelledJobRetention), options.CancelledJobRetention);
         RequirePositiveOrInfinite(failures, nameof(options.DiscardedJobRetention), options.DiscardedJobRetention);
+        RequirePositiveOrInfinite(failures, nameof(options.BatchRetention), options.BatchRetention);
 
         if (options.JsonSerializerOptions is null)
         {

@@ -11,8 +11,10 @@ The leader runs:
 |---|---|---|
 | Scheduler | `SchedulerInterval` (5 s) | Makes due `scheduled` and `retryable` jobs `available`, and wakes their queues |
 | Rescuer | 30 s | Jobs `running` longer than `RescueStuckJobsAfter` (1 h) and past their timeout: retried, discarded if out of attempts, or cancelled if a cancel was requested |
-| Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them) |
+| Cleaner | 30 s | Deletes `completed` and `cancelled` jobs after 24 h and `discarded` after 7 days (configurable; `Timeout.InfiniteTimeSpan` keeps them), except members of a batch that still exists |
 | Queue cleaner | 1 h | Deletes `{prefix}queue` rows unused for 24 h |
+| Batch finisher | 1 s | Enqueues the callbacks of batches whose jobs have all finished, and marks them finished, in one statement ([batches](batches.md)) |
+| Batch cleaner | 30 s | Deletes batches finished more than `BatchRetention` (24 h) ago whose callbacks have finished |
 | Periodic enqueuer | on schedule | Enqueues periodic jobs |
 | Queue depth | 10 s | Publishes `oxbow.queue.depth` |
 

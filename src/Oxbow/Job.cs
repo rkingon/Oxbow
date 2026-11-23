@@ -44,4 +44,7 @@ public sealed class Job<TArgs>
 
     /// <summary>Arbitrary JSON metadata.</summary>
     public JsonElement Metadata => Row.Metadata;
+
+    /// <summary>The batch this job is a member or callback of.</summary>
+    public long? BatchId => Row.BatchId;
 }
