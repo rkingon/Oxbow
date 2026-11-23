@@ -28,14 +28,11 @@ public abstract class PeriodicSchedule
     {
     }
 
-    /// <summary>The cron expression, or <see langword="null"/> for an interval schedule.</summary>
-    public virtual string? Expression => null;
+    internal virtual string? Expression => null;
 
-    /// <summary>The time zone a cron expression is evaluated in, or <see langword="null"/> for an interval schedule.</summary>
-    public virtual TimeZoneInfo? TimeZone => null;
+    internal virtual TimeZoneInfo? TimeZone => null;
 
-    /// <summary>The interval, or <see langword="null"/> for a cron schedule.</summary>
-    public virtual TimeSpan? Interval => null;
+    internal virtual TimeSpan? Interval => null;
 
     /// <summary>Runs every <paramref name="interval"/>.</summary>
     /// <param name="interval">The interval, at least one second.</param>
@@ -69,9 +66,13 @@ public abstract class PeriodicSchedule
             ? Cron(cron, TimeZoneInfo.FindSystemTimeZoneById(timeZoneId ?? "UTC"))
             : Every(TimeSpan.FromSeconds(everySeconds ?? throw new InvalidOperationException("A stored schedule has neither a cron expression nor an interval.")));
 
+    /// <summary>Whether <see cref="FromStored"/> failed because the stored schedule can't be read on this node.</summary>
+    internal static bool IsUnreadable(Exception exception) =>
+        exception is CronFormatException or TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException or InvalidOperationException;
+
     private sealed class IntervalSchedule(TimeSpan interval) : PeriodicSchedule
     {
-        public override TimeSpan? Interval => interval;
+        internal override TimeSpan? Interval => interval;
 
         public override DateTimeOffset? GetNextOccurrence(DateTimeOffset from) => from + interval;
 
@@ -80,9 +81,9 @@ public abstract class PeriodicSchedule
 
     private sealed class CronSchedule(string text, CronExpression expression, TimeZoneInfo timeZone) : PeriodicSchedule
     {
-        public override string Expression => text;
+        internal override string Expression => text;
 
-        public override TimeZoneInfo TimeZone => timeZone;
+        internal override TimeZoneInfo TimeZone => timeZone;
 
         public override DateTimeOffset? GetNextOccurrence(DateTimeOffset from) => expression.GetNextOccurrence(from, timeZone);
 

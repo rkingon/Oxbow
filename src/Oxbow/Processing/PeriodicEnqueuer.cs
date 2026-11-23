@@ -214,7 +214,7 @@ internal sealed class PeriodicEnqueuer(OxbowRuntime runtime, OxbowClient client,
         {
             schedule = code?.Schedule ?? PeriodicSchedule.FromStored(run.Cron, run.TimeZone, run.EverySeconds);
         }
-        catch (Exception ex) when (ex is Cronos.CronFormatException or TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException or InvalidOperationException)
+        catch (Exception ex) when (PeriodicSchedule.IsUnreadable(ex))
         {
             Log.PeriodicScheduleInvalid(logger, ex, run.Name);
             await AdvanceAsync(null, null, run, next: null, ran: false, kind: null, cancellationToken).ConfigureAwait(false);

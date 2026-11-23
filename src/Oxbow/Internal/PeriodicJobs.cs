@@ -13,13 +13,8 @@ internal static class PeriodicJobNames
     public static string Derive(string kind, PeriodicSchedule schedule) => $"{kind} {schedule}";
 }
 
-/// <summary>The args of a stored periodic job whose kind has no worker on this node, kept as the stored JSON.</summary>
-internal sealed class RawJobArgs(string kind, string json) : IJobArgs
-{
-    public string Kind => kind;
-
-    public string Json => json;
-}
+/// <summary>The args of a stored periodic job whose kind has no worker on this node; the stored JSON is inserted as is.</summary>
+internal sealed class RawJobArgs : IJobArgs;
 
 /// <summary>Stored insert options. Snake case and string enums, so the column reads like the rest of the schema.</summary>
 [JsonSourceGenerationOptions(

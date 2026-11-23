@@ -35,9 +35,6 @@ Oxbow.PeriodicJobRow.RegisteredInCode.get -> bool
 Oxbow.PeriodicJobRow.RegisteredInCode.init -> void
 Oxbow.PeriodicJobRow.UpdatedAt.get -> System.DateTimeOffset
 Oxbow.PeriodicJobRow.UpdatedAt.init -> void
-virtual Oxbow.PeriodicSchedule.Expression.get -> string?
-virtual Oxbow.PeriodicSchedule.Interval.get -> System.TimeSpan?
-virtual Oxbow.PeriodicSchedule.TimeZone.get -> System.TimeZoneInfo?
 Oxbow.IOxbowClient.CreatePeriodicJobAsync(string! name, Oxbow.PeriodicSchedule! schedule, Oxbow.IJobArgs! args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow!>!
 Oxbow.IOxbowClient.CreatePeriodicJobAsync(string! name, Oxbow.PeriodicSchedule! schedule, string! kind, System.Text.Json.JsonElement args, Oxbow.InsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobRow!>!
 Oxbow.IOxbowClient.ListPeriodicJobsAsync(Oxbow.PeriodicJobListQuery! query, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.PeriodicJobListResult!>!

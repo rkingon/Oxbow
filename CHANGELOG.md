@@ -13,7 +13,6 @@ All notable changes to this project are documented here. The format follows
   `PausePeriodicJobAsync`, `ResumePeriodicJobAsync`, `DeletePeriodicJobAsync`, `GetPeriodicJobAsync` and
   `ListPeriodicJobsAsync` (paged).
   `AddPeriodicJob(name, …)` names a code-registered job; unnamed ones get a name derived from kind and schedule.
-  `PeriodicSchedule` exposes `Expression`, `TimeZone` and `Interval`.
 
 ### Changed
 

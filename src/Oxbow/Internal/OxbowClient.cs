@@ -201,7 +201,7 @@ internal sealed partial class OxbowClient(
         }
         else
         {
-            job = Prepare(new RawJobArgs(kind, json), kind, json, typeInfo: null, argsDefaults: null, options, now);
+            job = Prepare(new RawJobArgs(), kind, json, typeInfo: null, argsDefaults: null, options, now);
         }
 
         job.Metadata[PeriodicJobNames.MetadataKey] = name;
@@ -409,7 +409,7 @@ internal sealed partial class OxbowClient(
         {
             return PeriodicSchedule.FromStored(row.CronExpression, row.TimeZoneId, row.Interval?.TotalSeconds);
         }
-        catch (Exception ex) when (ex is Cronos.CronFormatException or TimeZoneNotFoundException or InvalidTimeZoneException or ArgumentException)
+        catch (Exception ex) when (PeriodicSchedule.IsUnreadable(ex))
         {
             throw new InvalidOperationException($"Periodic job '{row.Name}' has a schedule this node can't read: {ex.Message}", ex);
         }
@@ -449,7 +449,7 @@ internal sealed partial class OxbowClient(
         }
     }
 
-    internal static void AddSchedule(NpgsqlCommand command, PeriodicSchedule schedule)
+    private static void AddSchedule(NpgsqlCommand command, PeriodicSchedule schedule)
     {
         command.Parameters.Add(Text("cron", schedule.Expression));
         command.Parameters.Add(Text("time_zone", schedule.TimeZone?.Id));
