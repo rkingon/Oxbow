@@ -350,6 +350,8 @@ internal sealed partial class OxbowClient(
                 $"Insert middleware left batch callback '{job.Kind}' with an invalid priority, max attempts or tag.");
         }
 
+        PartitionKeys.Validate(job.PartitionKey);
+
         var tags = new JsonArray();
         foreach (var tag in job.Tags)
         {
@@ -370,6 +372,7 @@ internal sealed partial class OxbowClient(
             ["unique_states"] = job.UniqueStates,
             ["sequence_key"] = job.SequenceKey,
             ["sequence_continue_on"] = job.SequenceKey is null ? null : (int)job.SequenceContinueOn,
+            ["partition_key"] = job.PartitionKey,
         }.ToJsonString();
     }
 

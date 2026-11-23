@@ -239,6 +239,88 @@ public sealed class ConcurrencyLimitTests(PostgresFixture database)
         Assert.Equal("""{"customer":"globex"}""", rest.PartitionKey);
     }
 
+    [Fact]
+    public async Task A_locked_row_does_not_use_up_the_only_free_slot()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var tracker = new LimitTracker();
+        await using var app = await StartAsync(prefix, tracker, o =>
+            o.Queues["default"] = new QueueOptions { MaxWorkers = 1, ConcurrencyLimit = new() { Global = 5 } });
+        await app.Client.PauseQueueAsync("default");
+        var held = await app.Client.InsertAsync(new LimitedArgs("a"));
+        var next = await app.Client.InsertAsync(new LimitedArgs("b"));
+
+        await using var owner = new NpgsqlConnection(database.OwnerConnectionString);
+        await owner.OpenAsync();
+        await using var holder = await owner.BeginTransactionAsync();
+        await using (var lockRow = new NpgsqlCommand($"SELECT 1 FROM {prefix}job WHERE id = {held.Job.Id} FOR UPDATE", owner, holder))
+        {
+            await lockRow.ExecuteScalarAsync();
+        }
+
+        await app.Client.ResumeQueueAsync("default");
+        await app.Recorder.WaitStartedAsync(next.Job.Id);
+        await holder.RollbackAsync();
+        await app.Recorder.WaitStartedAsync(held.Job.Id);
+    }
+
+    [Fact]
+    public async Task A_failed_completion_write_keeps_the_local_slot_until_the_row_stops_running()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var tracker = new LimitTracker();
+        await using var app = await StartAsync(prefix, tracker, o =>
+        {
+            o.Queues["default"] = new QueueOptions { MaxWorkers = 5, ConcurrencyLimit = new() { Local = 1 } };
+            o.RescueStuckJobsAfter = TimeSpan.FromSeconds(6);
+            o.JobTimeout = TimeSpan.FromSeconds(2);
+        });
+
+        var first = await app.Client.InsertAsync(new LimitedArgs("k", DelayMilliseconds: 500));
+        var second = await app.Client.InsertAsync(new LimitedArgs("k", DelayMilliseconds: 1000));
+        await app.Recorder.WaitStartedAsync(first.Job.Id);
+
+        // The completer can't write the first job's outcome and gives up, leaving its row running.
+        var revoke = $"REVOKE UPDATE ON public.{prefix}job FROM {PostgresFixture.AppRole}";
+        await database.ExecuteSerializedAsOwnerAsync(revoke);
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        await database.ExecuteSerializedAsOwnerAsync(revoke.Replace("REVOKE", "GRANT").Replace(" FROM ", " TO "));
+
+        var maxRunning = await SampleWhileAsync(
+            prefix, "partition_key", () => app.Client.GetAsync(second.Job.Id).Result!.State != JobState.Completed);
+        Assert.Equal(JobState.Completed, (await app.Client.GetAsync(second.Job.Id))!.State);
+        Assert.Equal(1, maxRunning);
+    }
+
+    [Fact]
+    public async Task Batch_callbacks_keep_their_partition_key()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var tracker = new LimitTracker();
+        await using var app = await TestApp.StartAsync(database, prefix, o =>
+            o.Queues["default"] = new QueueOptions { ConcurrencyLimit = new() { Global = 1 } }, b =>
+        {
+            b.Services.AddSingleton(tracker);
+            b.AddWorker<LimitedArgs, LimitedWorker>().AddWorker<RecordArgs, RecordWorker>().AddInsertMiddleware<KeyByTenant>();
+        });
+
+        var inserted = await app.Client.InsertBatchAsync([new InsertManyItem(new RecordArgs("member"))], new BatchOptions
+        {
+            OnComplete = new BatchCallback(new LimitedArgs("acme")),
+            OnSuccess = new BatchCallback(new RecordArgs("done"), new InsertOptions { PartitionKey = "explicit" }),
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        Batch? batch;
+        while ((batch = await app.Client.GetBatchAsync(inserted.BatchId))?.OnSuccessJobId is null)
+        {
+            await Task.Delay(50, cts.Token);
+        }
+
+        Assert.Equal("""tenant-1:{"customer":"acme"}""", (await app.Client.GetAsync(batch.OnCompleteJobId!.Value))!.PartitionKey);
+        Assert.Equal("tenant-1:explicit", (await app.Client.GetAsync(batch.OnSuccessJobId.Value))!.PartitionKey);
+    }
+
     private Task<TestApp> StartAsync(string prefix, LimitTracker tracker, Action<OxbowOptions> configure) =>
         TestApp.StartAsync(database, prefix, configure, b =>
         {
@@ -338,5 +420,5 @@ public sealed class LimitedWorker(LimitTracker tracker, JobRecorder recorder) : 
         }
     }
 
-    public TimeSpan? GetTimeout(Job<LimitedArgs> job) => Timeout.InfiniteTimeSpan;
+    public TimeSpan? GetTimeout(Job<LimitedArgs> job) => job.Args.Block ? Timeout.InfiniteTimeSpan : null;
 }

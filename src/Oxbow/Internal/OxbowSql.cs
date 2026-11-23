@@ -139,19 +139,20 @@ internal sealed class OxbowSql
                 FROM candidates
             ),
             eligible AS (
-                SELECT ranked.id
+                SELECT ranked.id, ranked.priority, ranked.scheduled_at
                 FROM ranked
                 LEFT JOIN room USING (partition_key)
                 WHERE ranked.partition_key IS NULL
                    OR ranked.rank <= coalesce(room.room, least(@global_limit::int, @local_limit::int))
-                ORDER BY ranked.priority, ranked.scheduled_at, ranked.id
-                LIMIT @max
             ),
+            -- LIMIT after SKIP LOCKED, so a row someone else holds doesn't use up a slot.
             locked AS (
                 SELECT j.id
                 FROM {job} AS j
-                WHERE j.id IN (SELECT id FROM eligible)
-                  AND j.state = 'available'
+                JOIN eligible AS e ON e.id = j.id
+                WHERE j.state = 'available'
+                ORDER BY e.priority, e.scheduled_at, e.id
+                LIMIT @max
                 FOR UPDATE OF j SKIP LOCKED
             )
             UPDATE {job} AS j
@@ -168,6 +169,8 @@ internal sealed class OxbowSql
             WHERE j.id = locked.id
             RETURNING {Columns("j")}
             """;
+
+        IsRunningAttempt = $"SELECT EXISTS (SELECT 1 FROM {job} WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at)";
 
         // River's JobSetStateIfRunningMany: only a running job moves, and a retry, snooze or soft stop of a job whose
         // cancellation was requested becomes a cancellation instead.
@@ -785,7 +788,7 @@ internal sealed class OxbowSql
 
         string InsertCallback(string column, string from, string condition, string callback) => $"""
                 INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
-                    sequence_key, sequence_continue_on)
+                    sequence_key, sequence_continue_on, partition_key)
                 SELECT
                     f.{column} -> 'args',
                     f.{column} ->> 'kind',
@@ -803,7 +806,8 @@ internal sealed class OxbowSql
                     decode(f.{column} ->> 'unique_key', 'base64'),
                     nullif((f.{column} ->> 'unique_states')::int, 0)::bit(8),
                     f.{column} ->> 'sequence_key',
-                    (f.{column} ->> 'sequence_continue_on')::smallint
+                    (f.{column} ->> 'sequence_continue_on')::smallint,
+                    f.{column} ->> 'partition_key'
                 FROM {from}
                 WHERE f.{column} IS NOT NULL AND {condition}
                 ON CONFLICT (unique_key)
@@ -994,6 +998,8 @@ internal sealed class OxbowSql
     public string QueueLock { get; }
 
     public string GetAvailableLimited { get; }
+
+    public string IsRunningAttempt { get; }
 
     public string SetStateIfRunning { get; }
 

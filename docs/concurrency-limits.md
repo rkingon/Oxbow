@@ -33,7 +33,8 @@ no key is never limited, even in a limited queue.
 
 For a kind with [encrypted args](encryption.md), a key derived from `[PartitionKey]` properties is stored as the
 protector's keyed hash (hex), so the column doesn't reveal the values; jobs with equal values still share it. A key you
-set yourself is stored as given. Stored periodic jobs have no args type, so they only get a key from their options.
+set yourself is stored as given. A stored periodic job derives its key only on a leader that has its args type
+registered; set `PartitionKey` in its options to be sure.
 
 The key is on `JobRow.PartitionKey`, and `JobFilter.PartitionKey` lists, cancels, retries or deletes one partition's
 jobs (see [managing jobs](managing-jobs.md)).
@@ -58,7 +59,8 @@ the queue.
 - Queues with no `ConcurrencyLimit` keep the plain `FOR UPDATE SKIP LOCKED` fetch.
 
 Because outcomes are written in batches, a finished job holds its key's slot until the completer writes it, about
-50 ms. A slot freed on another node is picked up at the next fetch, at worst one `FetchPollInterval` later.
+50 ms. If that write fails, the slot stays taken until the job's row stops running (normally when the rescuer moves
+it). A slot freed on another node is picked up at the next fetch, at worst one `FetchPollInterval` later.
 
 ## Caveats
 

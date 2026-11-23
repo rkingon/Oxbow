@@ -181,16 +181,31 @@ internal sealed class Producer(
                     TriggerFetch();
                     if (key is not null)
                     {
-                        _ = ReleaseKeyAsync(key, running.Written);
+                        _ = ReleaseKeyAsync(key, running, workToken);
                     }
                 }
             },
             CancellationToken.None);
     }
 
-    private async Task ReleaseKeyAsync(string key, Task written)
+    private async Task ReleaseKeyAsync(string key, RunningJob running, CancellationToken cancellationToken)
     {
-        await written.ConfigureAwait(false);
+        if (await running.Written.ConfigureAwait(false) is null)
+        {
+            // The row may still be running (until the rescuer moves it), so it keeps its slot until it isn't.
+            try
+            {
+                while (await IsRunningAttemptAsync(running.Row, cancellationToken).ConfigureAwait(false) is not false)
+                {
+                    await Task.Delay(runtime.Options.FetchPollInterval, timeProvider, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+
         lock (_keyRunning)
         {
             if (--_keyRunning[key] == 0)
@@ -200,6 +215,26 @@ internal sealed class Producer(
         }
 
         TriggerFetch();
+    }
+
+    /// <summary>Whether the row is still running this attempt; null if that couldn't be checked.</summary>
+    private async Task<bool?> IsRunningAttemptAsync(JobRow row, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.IsRunningAttempt);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("id", row.Id);
+                command.Parameters.AddWithValue("attempted_at", row.AttemptedAt!.Value);
+                return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Log.PollFailed(logger, ex, queue);
+            return null;
+        }
     }
 
     private async Task<List<JobRow>> FetchAsync(int max, CancellationToken cancellationToken)

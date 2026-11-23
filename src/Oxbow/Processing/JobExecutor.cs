@@ -18,8 +18,11 @@ internal sealed class RunningJob(JobRow row) : IDisposable
 
     public Task Task { get; set; } = Task.CompletedTask;
 
-    /// <summary>Completes once the attempt's outcome is written; the row stays running until then.</summary>
-    public Task Written { get; set; } = Task.CompletedTask;
+    /// <summary>
+    /// The attempt's outcome as written: the resulting state, or null if the write wasn't confirmed (it failed, or the
+    /// outcome was never queued), in which case the row may still be running.
+    /// </summary>
+    public Task<JobState?> Written { get; set; } = Task.FromResult<JobState?>(null);
 
     public void Cancel()
     {
