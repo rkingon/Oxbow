@@ -14,6 +14,12 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
 {
     private readonly string _table = Validate(schema, tablePrefix);
 
+    /// <summary>
+    /// Decrypts args of kinds that encrypt them: the app's <see cref="IJobArgsProtector"/>, e.g. resolved from its
+    /// service provider. Without it, asserting on an encrypted job throws.
+    /// </summary>
+    public IJobArgsProtector? ArgsProtector { get; init; }
+
     /// <summary>Asserts exactly one job of <typeparamref name="TArgs"/>'s kind matches, and returns it.</summary>
     /// <typeparam name="TArgs">The args type.</typeparam>
     /// <param name="connection">An open connection.</param>
@@ -116,7 +122,7 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
                         Queue = reader.GetString(13),
                         Tags = reader.GetFieldValue<string[]>(14),
                     };
-                    var args = (TArgs)row.Args.Deserialize(json.GetTypeInfo(typeof(TArgs)))!;
+                    var args = (TArgs)Args(row).Deserialize(json.GetTypeInfo(typeof(TArgs)))!;
                     var job = new Job<TArgs>(row, args);
                     if (filter.Matches(job))
                     {
@@ -127,6 +133,18 @@ public sealed class OxbowAssert(string schema = "public", string tablePrefix = "
 
             return jobs;
         }
+    }
+
+    private JsonElement Args(JobRow row)
+    {
+        if (ArgsProtector is not null)
+        {
+            return ArgsProtector.UnprotectArgs(row);
+        }
+
+        return row.Args.ValueKind == JsonValueKind.Object && row.Args.TryGetProperty("oxbow:enc", out _)
+            ? throw new OxbowAssertionException($"Args of job {row.Id} are encrypted. Set OxbowAssert.ArgsProtector to decrypt them.")
+            : row.Args;
     }
 
     private static string KindOf<TArgs>() =>

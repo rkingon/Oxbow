@@ -9,6 +9,7 @@
 - [Scheduled and periodic jobs](scheduled-and-periodic-jobs.md)
 - [Queues](queues.md): concurrency, pause and resume
 - [Middleware](middleware.md)
+- [Args encryption](encryption.md): at rest, on ASP.NET Core Data Protection
 - [Maintenance and leader election](maintenance.md)
 - [Graceful shutdown](graceful-shutdown.md)
 - [Observability](observability.md)

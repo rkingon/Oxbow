@@ -351,12 +351,23 @@ internal sealed partial class OxbowClient(
         job.Scheduled = job.ScheduledAt > now;
         job.EncodedArgs = JsonSerializer.Serialize(args, typeInfo);
 
+        var protector = runtime.Options.EncryptAllArgs || ArgsEnvelope.IsMarked(argsType)
+            ? runtime.ArgsProtector ?? throw new InvalidOperationException(
+                $"Job kind '{kind}' encrypts its args, but no IJobArgsProtector is registered. Call AddArgsEncryption() from Oxbow.DataProtection.")
+            : null;
+
         var unique = options?.Unique ?? argsDefaults?.Unique;
         if (unique is not null && !UniqueKeys.IsEmpty(unique))
         {
             UniqueKeys.Validate(unique);
-            job.UniqueKey = UniqueKeys.Build(unique, kind, job.EncodedArgs, typeInfo, job.Queue, job.ScheduledAt ?? now);
+            job.UniqueKey = UniqueKeys.Build(
+                unique, kind, job.EncodedArgs, typeInfo, job.Queue, job.ScheduledAt ?? now, unique.ByArgs ? protector : null);
             job.UniqueStates = UniqueKeys.StatesBitmask(unique);
+        }
+
+        if (protector is not null)
+        {
+            job.EncodedArgs = ArgsEnvelope.Seal(protector.Protect(kind, job.EncodedArgs));
         }
 
         return job;

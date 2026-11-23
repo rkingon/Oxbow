@@ -18,7 +18,8 @@ await assert.NotInsertedAsync<ChargeCard>(connection, transaction);
 await transaction.RollbackAsync(); // nothing persists
 ```
 
-Failures throw `OxbowAssertionException`, so it works with any test framework.
+Failures throw `OxbowAssertionException`, so it works with any test framework. For kinds with
+[encrypted args](encryption.md#testing), set `ArgsProtector`.
 
 ## Run a worker without a database
 

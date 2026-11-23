@@ -1,1 +1,3 @@
 #nullable enable
+Oxbow.Testing.OxbowAssert.ArgsProtector.get -> Oxbow.IJobArgsProtector?
+Oxbow.Testing.OxbowAssert.ArgsProtector.init -> void

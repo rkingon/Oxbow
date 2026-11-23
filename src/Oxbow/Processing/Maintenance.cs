@@ -180,7 +180,7 @@ internal sealed class Maintenance(
             {
                 try
                 {
-                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json);
+                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector);
                     var timeout = unit.GetTimeout() ?? runtime.Options.JobTimeout;
 
                     // River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.
@@ -191,9 +191,9 @@ internal sealed class Maintenance(
 
                     nextRetry = unit.GetNextRetry();
                 }
-                catch (JsonException)
+                catch (Exception ex) when (ex is JsonException or JobArgsDecryptionException)
                 {
-                    // Args that can't be deserialized are retried by the retry policy, then discarded.
+                    // Args that can't be decrypted or deserialized are retried by the retry policy, then discarded.
                 }
             }
         }
