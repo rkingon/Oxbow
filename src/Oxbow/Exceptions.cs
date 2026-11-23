@@ -70,3 +70,30 @@ public sealed class PeriodicJobExistsException : Exception
     /// <summary>The periodic job's name.</summary>
     public string Name { get; }
 }
+
+/// <summary>
+/// A job's args are encrypted and can't be decrypted: no <see cref="IJobArgsProtector"/> is registered, the key is
+/// gone or revoked, or the payload was tampered with. Worked like args that fail to deserialize: retried, then discarded.
+/// </summary>
+public sealed class JobArgsDecryptionException : Exception
+{
+    /// <summary>Creates the exception.</summary>
+    public JobArgsDecryptionException()
+    {
+    }
+
+    /// <summary>Creates the exception with a message.</summary>
+    /// <param name="message">What failed.</param>
+    public JobArgsDecryptionException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Creates the exception with a message and a cause.</summary>
+    /// <param name="message">What failed.</param>
+    /// <param name="innerException">The protector's error.</param>
+    public JobArgsDecryptionException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

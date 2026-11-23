@@ -36,6 +36,8 @@ internal sealed class Maintenance(
                 EveryAsync("rescuer", runtime.Options.RescuerInterval, RescueAsync, cancellationToken),
                 EveryAsync("cleaner", runtime.Options.CleanerInterval, CleanAsync, cancellationToken),
                 EveryAsync("queue-cleaner", QueueCleanerInterval, CleanQueuesAsync, cancellationToken),
+                EveryAsync("batch-finisher", runtime.Options.BatchFinisherInterval, FinishBatchesAsync, cancellationToken, runImmediately: true),
+                EveryAsync("batch-cleaner", runtime.Options.CleanerInterval, CleanBatchesAsync, cancellationToken),
                 EveryAsync("queue-depth", DepthInterval, MeasureDepthAsync, cancellationToken, runImmediately: true),
                 _periodic.RunAsync(cancellationToken)).ConfigureAwait(false);
         }
@@ -184,11 +186,8 @@ internal sealed class Maintenance(
             {
                 try
                 {
-                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json);
-                    var timeout = unit.GetTimeout() ?? runtime.Options.JobTimeout;
-
-                    // River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.
-                    if (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout))
+                    var unit = registration.CreateUnit(job, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector);
+                    if (MayStillBeRunning(job, unit.GetTimeout() ?? runtime.Options.JobTimeout, now))
                     {
                         return null;
                     }
@@ -199,6 +198,14 @@ internal sealed class Maintenance(
                 {
                     // Args that can't be deserialized are retried by the retry policy, then discarded.
                 }
+                catch (JobArgsDecryptionException) when (MayStillBeRunning(job, runtime.Options.JobTimeout, now))
+                {
+                    // Only this node may lack the key, so the job may be running elsewhere: hold to the default timeout.
+                    return null;
+                }
+                catch (JobArgsDecryptionException)
+                {
+                }
             }
         }
 
@@ -208,6 +215,17 @@ internal sealed class Maintenance(
         }
 
         return (JobState.Retryable, nextRetry ?? retryPolicy.NextRetry(job), null);
+    }
+
+    /// <summary>
+    /// River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running. GetStuck returns an
+    /// attempt that heartbeats only once its heartbeat has gone quiet, so its timeout no longer says that.
+    /// </summary>
+    private static bool MayStillBeRunning(JobRow job, TimeSpan timeout, DateTimeOffset now)
+    {
+        var heartbeating = job.HeartbeatAt is { } heartbeatAt && job.AttemptedAt is { } started && heartbeatAt >= started;
+        return !heartbeating
+            && (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout));
     }
 
     internal async Task CleanAsync(CancellationToken cancellationToken)
@@ -235,6 +253,94 @@ internal sealed class Maintenance(
         var keepForever = OxbowRuntime.IsInfinite(retention);
         command.Parameters.AddWithValue($"{state}_do_delete", !keepForever);
         command.Parameters.AddWithValue($"{state}_horizon", keepForever ? now : now - retention);
+    }
+
+    internal async Task FinishBatchesAsync(CancellationToken cancellationToken)
+    {
+        var afterId = 0L;
+        while (true)
+        {
+            var candidates = new List<long>();
+            var select = runtime.DataSource.CreateCommand(runtime.Sql.BatchGetFinishable);
+            await using (select.ConfigureAwait(false))
+            {
+                select.Parameters.AddWithValue("after", afterId);
+                select.Parameters.AddWithValue("max", BatchSize);
+                var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                await using (reader.ConfigureAwait(false))
+                {
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        candidates.Add(reader.GetInt64(0));
+                    }
+                }
+            }
+
+            // One statement per batch, so a batch whose callback can't be inserted doesn't hold up the others.
+            var queues = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in candidates)
+            {
+                try
+                {
+                    var finish = runtime.DataSource.CreateCommand(runtime.Sql.BatchFinish);
+                    await using (finish.ConfigureAwait(false))
+                    {
+                        finish.Parameters.AddWithValue("id", id);
+                        var reader = await finish.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                        await using (reader.ConfigureAwait(false))
+                        {
+                            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                            {
+                                OxbowDiagnostics.JobsInserted.Add(1);
+                                if (reader.GetString(1) == "available")
+                                {
+                                    queues.Add(reader.GetString(0));
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (PostgresException ex)
+                {
+                    Log.BatchFinishFailed(logger, ex, id);
+                }
+            }
+
+            if (queues.Count > 0)
+            {
+                await NotifyQueuesAsync(queues, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (candidates.Count < BatchSize)
+            {
+                return;
+            }
+
+            afterId = candidates[^1];
+        }
+    }
+
+    internal async Task CleanBatchesAsync(CancellationToken cancellationToken)
+    {
+        if (OxbowRuntime.IsInfinite(runtime.Options.BatchRetention))
+        {
+            return;
+        }
+
+        var horizon = timeProvider.GetUtcNow() - runtime.Options.BatchRetention;
+        while (true)
+        {
+            var command = runtime.DataSource.CreateCommand(runtime.Sql.BatchDeleteExpired);
+            await using (command.ConfigureAwait(false))
+            {
+                command.Parameters.AddWithValue("horizon", horizon);
+                command.Parameters.AddWithValue("max", BatchSize);
+                if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) < BatchSize)
+                {
+                    return;
+                }
+            }
+        }
     }
 
     private async Task CleanQueuesAsync(CancellationToken cancellationToken)

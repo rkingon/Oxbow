@@ -54,7 +54,8 @@ var page = await oxbow.ListPeriodicJobsAsync(new PeriodicJobListQuery { Limit = 
 
 - Listing is paged by name, like `ListAsync`. Rows expose the schedule as stored (`CronExpression`, `TimeZoneId`,
   `Interval`) without parsing it, so reading never depends on the reader's time zone database.
-- Stored as kind, args JSON and insert options. An overload takes a kind and a `JsonElement`, for admin tools that
+- Stored as kind, args JSON and insert options. Args of an encrypted kind are stored encrypted and decrypted for each
+  run (see [encryption](encryption.md#where-args-are-plaintext)). An overload takes a kind and a `JsonElement`, for admin tools that
   don't have the args type.
 - `CreatePeriodicJobAsync` fails with `PeriodicJobExistsException` if the name is taken, so an admin tool can't
   overwrite a job by accident. `UpsertPeriodicJobAsync` creates or replaces. Replacing keeps the run history and any pause. A changed schedule

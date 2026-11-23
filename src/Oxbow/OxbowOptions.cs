@@ -58,6 +58,13 @@ public sealed class OxbowOptions
     public TimeSpan DiscardedJobRetention { get; set; } = TimeSpan.FromDays(7);
 
     /// <summary>
+    /// How long a finished batch is kept, and with it its members, which the job cleaner leaves alone while their batch
+    /// exists. A batch whose callbacks haven't finished is kept regardless. <see cref="Timeout.InfiniteTimeSpan"/> keeps
+    /// batches forever. Default 24 hours.
+    /// </summary>
+    public TimeSpan BatchRetention { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>
     /// Allow inserting kinds that have no worker registered on this client. Only consulted when workers are registered;
     /// insert-only clients skip the check.
     /// </summary>
@@ -74,6 +81,12 @@ public sealed class OxbowOptions
     /// </summary>
     public object? DataSourceServiceKey { get; set; }
 
+    /// <summary>
+    /// Encrypt every kind's args at rest, not only those marked <see cref="EncryptArgsAttribute"/>. Needs an
+    /// <see cref="IJobArgsProtector"/>, e.g. <c>AddArgsEncryption()</c> from <c>Oxbow.DataProtection</c>.
+    /// </summary>
+    public bool EncryptAllArgs { get; set; }
+
     /// <summary>This node's ID, recorded in <see cref="JobRow.AttemptedBy"/>. Default: host name plus a random suffix.</summary>
     public string? ClientId { get; set; }
 
@@ -83,6 +96,8 @@ public sealed class OxbowOptions
     internal TimeSpan CleanerInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     internal TimeSpan ElectInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    internal TimeSpan BatchFinisherInterval { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>Registers a periodic job.</summary>
     /// <param name="schedule">When it runs.</param>

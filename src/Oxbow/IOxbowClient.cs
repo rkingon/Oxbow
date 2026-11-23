@@ -75,6 +75,43 @@ public interface IOxbowClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts a batch of jobs on a connection of its own. The batch and its jobs are written in one statement, so the
+    /// batch is never seen without them. Once every job has finished, the leader enqueues the callbacks in
+    /// <paramref name="options"/>. An empty batch finishes at once and enqueues both.
+    /// </summary>
+    /// <param name="items">The member jobs.</param>
+    /// <param name="options">The callbacks.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch ID and the insert results, in order.</returns>
+    Task<BatchInsertResult> InsertBatchAsync(
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts a batch of jobs on the caller's connection and transaction, so the batch commits or rolls back with the
+    /// caller's data.
+    /// </summary>
+    /// <param name="connection">An open connection.</param>
+    /// <param name="transaction">The transaction to insert in, if any.</param>
+    /// <param name="items">The member jobs.</param>
+    /// <param name="options">The callbacks.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch ID and the insert results, in order.</returns>
+    Task<BatchInsertResult> InsertBatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        IEnumerable<InsertManyItem> items,
+        BatchOptions? options = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Gets a batch and its progress.</summary>
+    /// <param name="id">The batch's ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The batch, or <see langword="null"/> if it doesn't exist or has been cleaned up.</returns>
+    Task<Batch?> GetBatchAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cancels a job. A job that hasn't started is cancelled at once and never runs. A running job's worker is
     /// signalled through its cancellation token, on whichever node runs it, and decides whether to stop.
     /// </summary>
@@ -96,6 +133,35 @@ public interface IOxbowClient
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The job, deleted unless it was running, or <see langword="null"/> if it doesn't exist.</returns>
     Task<JobRow?> DeleteAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels every job matching <paramref name="filter"/>, as <see cref="CancelAsync"/> would one at a time. Jobs are
+    /// processed in batches, each committed on its own, so a failure part-way leaves earlier batches cancelled; running
+    /// it again is safe. Jobs inserted while it runs may or may not be included.
+    /// </summary>
+    /// <param name="filter">
+    /// The jobs to cancel. A filter that matches everything is rejected unless <see cref="JobFilter.All"/> is set, and so
+    /// is a <see cref="JobListQuery"/>, whose paging would suggest only one page is affected.
+    /// </param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>How many jobs were cancelled, and how many running ones were asked to stop.</returns>
+    Task<CancelManyResult> CancelManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes every matching job available to run now, as <see cref="RetryAsync"/> would one at a time, in batches like
+    /// <see cref="CancelManyAsync"/>. A job that would take a unique key another live job holds is skipped, where
+    /// <see cref="RetryAsync"/> would throw.
+    /// </summary>
+    /// <param name="filter">The jobs to retry; see <see cref="CancelManyAsync"/>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>How many jobs were made available, and how many were skipped for their unique key.</returns>
+    Task<RetryManyResult> RetryManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes every matching job that isn't running, in batches like <see cref="CancelManyAsync"/>.</summary>
+    /// <param name="filter">The jobs to delete; see <see cref="CancelManyAsync"/>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>How many jobs were deleted.</returns>
+    Task<long> DeleteManyAsync(JobFilter filter, CancellationToken cancellationToken = default);
 
     /// <summary>Gets a job.</summary>
     /// <param name="id">The job's ID.</param>

@@ -25,6 +25,13 @@ internal sealed class OxbowRuntime
         json.MakeReadOnly();
         Json = json;
 
+        ArgsProtector = services.GetService<IJobArgsProtector>();
+        if (Options.EncryptAllArgs && ArgsProtector is null)
+        {
+            throw new InvalidOperationException(
+                "OxbowOptions.EncryptAllArgs needs an IJobArgsProtector. Register one, e.g. with AddArgsEncryption() from Oxbow.DataProtection.");
+        }
+
         var clientId = Options.ClientId ?? $"{Environment.MachineName}_{Guid.NewGuid():N}";
         ClientId = clientId.Length > 120 ? clientId[..120] : clientId;
     }
@@ -38,6 +45,8 @@ internal sealed class OxbowRuntime
     public JsonSerializerOptions Json { get; }
 
     public string ClientId { get; }
+
+    public IJobArgsProtector? ArgsProtector { get; }
 
     public static bool IsInfinite(TimeSpan value) => value == Timeout.InfiniteTimeSpan;
 }

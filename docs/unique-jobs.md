@@ -21,6 +21,9 @@ The key is a SHA-256 of:
 | `ByPeriod` | the start of the period containing the job's `ScheduledAt` (or now) |
 | `ByQueue` | the queue |
 
+For kinds with [encrypted args](encryption.md#unique-jobs), a key that includes the args is an HMAC instead, so it
+can't be used to confirm a guessed value.
+
 `ByState` sets which states block a duplicate. The default is every state except `cancelled` and `discarded`, so a
 cancelled or discarded job doesn't stop a new one. A custom set must include `available`, `pending`, `running` and
 `scheduled`.

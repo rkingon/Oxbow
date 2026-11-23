@@ -7,7 +7,10 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Oxbow.Internal;
 
-/// <summary>Builds River-style unique keys: <c>&amp;kind=…&amp;args=…&amp;period=…&amp;queue=…</c>, hashed with SHA-256.</summary>
+/// <summary>
+/// Builds River-style unique keys: <c>&amp;kind=…&amp;args=…&amp;period=…&amp;queue=…</c>, hashed with SHA-256, or with the
+/// args protector's keyed hash when the args are encrypted.
+/// </summary>
 internal static class UniqueKeys
 {
     private const int MaxDepth = 16;
@@ -62,7 +65,8 @@ internal static class UniqueKeys
         string encodedArgs,
         JsonTypeInfo? argsTypeInfo,
         string queue,
-        DateTimeOffset scheduledAt)
+        DateTimeOffset scheduledAt,
+        IJobArgsProtector? keyedHash = null)
     {
         var key = new StringBuilder();
         if (!options.ExcludeKind)
@@ -88,7 +92,8 @@ internal static class UniqueKeys
             key.Append("&queue=").Append(queue);
         }
 
-        return SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString()));
+        var bytes = Encoding.UTF8.GetBytes(key.ToString());
+        return keyedHash is null ? SHA256.HashData(bytes) : keyedHash.HashUniqueKey(bytes);
     }
 
     private static string UniqueArgs(string encodedArgs, JsonTypeInfo? typeInfo)
