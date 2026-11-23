@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Oxbow.Internal;
 using Oxbow.Processing;
 
@@ -248,6 +249,9 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             app.Client.UpsertPeriodicJobAsync(derived, PeriodicSchedule.Every(TimeSpan.FromMinutes(1)), new RecordArgs("x")));
         Assert.NotNull((await app.Client.PausePeriodicJobAsync(derived))!.PausedAt);
+        var resumed = await app.Client.ResumePeriodicJobAsync(derived);
+        Assert.Null(resumed!.PausedAt);
+        await WaitUntilAsync(async () => (await app.Client.GetPeriodicJobAsync(derived))!.NextRunAt > DateTimeOffset.UtcNow.AddMinutes(59));
 
         // Deleting the row of a job still in code resets it; the leader recreates it.
         await app.Client.DeletePeriodicJobAsync(derived);
@@ -332,6 +336,29 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         Assert.Equal("UTC", listed.TimeZoneId);
     }
 
+    [Fact]
+    public async Task A_run_whose_insert_fails_is_skipped_even_on_a_one_connection_pool()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var single = new NpgsqlConnectionStringBuilder(database.AppConnectionString) { MaxPoolSize = 1 }.ConnectionString;
+        await using var app = await TestApp.StartAsync(database, prefix, o =>
+        {
+            Queues(o);
+            o.PollOnly = true;
+            o.DataSourceServiceKey = "single";
+        }, b =>
+        {
+            Workers(b.AddInsertMiddleware<RejectPeriodic>());
+            b.Services.AddKeyedSingleton("single", (_, _) => NpgsqlDataSource.Create(single));
+        });
+        await app.Client.UpsertPeriodicJobAsync("rejected", PeriodicSchedule.Every(TimeSpan.FromHours(1)), new RecordArgs("x"));
+        await database.ExecuteAsOwnerAsync($"UPDATE public.{prefix}periodic_job SET next_run_at = now() - interval '1 second'");
+
+        await WaitUntilAsync(async () => (await app.Client.GetPeriodicJobAsync("rejected"))!.NextRunAt > DateTimeOffset.UtcNow.AddMinutes(59));
+        Assert.Null((await app.Client.GetPeriodicJobAsync("rejected"))!.LastRunAt);
+        Assert.Empty(await RunsAsync(app, "rejected"));
+    }
+
     private static Elector ElectorOf(TestApp app) =>
         app.Host.Services.GetServices<IHostedService>().OfType<OxbowHostedService>().Single().Elector!;
 
@@ -353,6 +380,14 @@ public sealed class PeriodicJobTests(PostgresFixture database)
         {
             await Task.Delay(50, cts.Token);
         }
+    }
+
+    private sealed class RejectPeriodic : IJobInsertMiddleware
+    {
+        public Task<IReadOnlyList<InsertResult>> InvokeAsync(JobInsertContext context, JobInsertDelegate next) =>
+            context.Jobs.Any(j => j.Metadata.ContainsKey("oxbow:periodic_job"))
+                ? throw new InvalidOperationException("Rejected.")
+                : next(context);
     }
 
     private sealed class StampSource : IJobInsertMiddleware

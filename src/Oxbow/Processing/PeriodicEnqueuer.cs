@@ -263,7 +263,9 @@ internal sealed class PeriodicEnqueuer(OxbowRuntime runtime, OxbowClient client,
                 {
                     await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
                     Log.PeriodicRunFailed(logger, ex, run.Name);
-                    await AdvanceAsync(null, null, run, next, ran: false, kind: null, cancellationToken).ConfigureAwait(false);
+
+                    // On this connection: asking the pool for another while holding it can deadlock a small pool.
+                    await AdvanceAsync(connection, null, run, next, ran: false, kind: null, cancellationToken).ConfigureAwait(false);
                     return;
                 }
 

@@ -456,8 +456,8 @@ internal sealed class OxbowSql
             LIMIT @limit
             """;
 
-        // The leader's sync of the jobs registered in its code: create missing rows, take up schedule changes, and
-        // refresh the rest hourly so rows for jobs no longer in any leader's code can be told apart and deleted.
+        // The leader's sync of the jobs registered in its code: create missing rows, take up schedule changes, give a
+        // resumed job its next run, and refresh the rest hourly so rows for jobs no longer in any leader's code can be told apart and deleted.
         PeriodicJobSyncCode = $"""
             INSERT INTO {periodic} (name, registered_in_code, cron, time_zone, every, next_run_at)
             SELECT i.name, true, i.cron, i.time_zone, i.every_seconds * interval '1 second', i.first_run_at
@@ -471,6 +471,7 @@ internal sealed class OxbowSql
                 every = i.every_seconds * interval '1 second',
                 next_run_at = CASE
                     WHEN (p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                      OR p.next_run_at IS NULL
                     THEN i.next_occurrence
                     ELSE p.next_run_at
                 END,
@@ -480,6 +481,7 @@ internal sealed class OxbowSql
             WHERE p.name = i.name
               AND p.registered_in_code
               AND ((p.cron, p.time_zone, p.every) IS DISTINCT FROM (i.cron, i.time_zone, i.every_seconds * interval '1 second')
+                   OR (p.next_run_at IS NULL AND i.next_occurrence IS NOT NULL AND p.paused_at IS NULL)
                    OR p.updated_at < now() - interval '1 hour');
 
             DELETE FROM {periodic} WHERE registered_in_code AND updated_at < now() - interval '24 hours';

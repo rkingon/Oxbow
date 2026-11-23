@@ -361,7 +361,11 @@ internal sealed partial class OxbowClient(
                 await using (update.ConfigureAwait(false))
                 {
                     update.Parameters.AddWithValue("name", name);
-                    update.Parameters.Add(Timestamp("next_run_at", ParseSchedule(row).GetNextOccurrence(timeProvider.GetUtcNow())));
+                    // A code-registered job's schedule lives in the leader's code (its time zone may not even be a
+                    // system one), so the leader's sync fills in the next run.
+                    update.Parameters.Add(Timestamp("next_run_at", row.RegisteredInCode
+                        ? null
+                        : ParseSchedule(row).GetNextOccurrence(timeProvider.GetUtcNow())));
                     row = (await PeriodicJobRowReader.ReadAllAsync(update, cancellationToken).ConfigureAwait(false))[0];
                 }
 

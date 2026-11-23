@@ -116,6 +116,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}job, {s}.{p}queue, {s}.{p}leader 
 GRANT SELECT ON {s}.{p}migration TO {role};
 GRANT USAGE ON SEQUENCE {s}.{p}job_id_seq TO {role};
 GRANT EXECUTE ON FUNCTION {s}.{p}job_state_in_bitmask(bit(8), {s}.{p}job_state) TO {role};
+GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}periodic_job TO {role};
 ```
 
 LISTEN/NOTIFY needs no grant. The runtime never runs DDL, never creates temp tables, never calls `SET` (or

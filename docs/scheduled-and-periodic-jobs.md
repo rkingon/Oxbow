@@ -31,7 +31,8 @@ services.AddOxbow(o =>
 - The name keys the job's persisted state. Without one, the name is derived from the kind and the schedule
   (`refresh_rates every 00:15:00`), so changing the schedule starts a fresh history, and `runOnStart` fires again. Name
   jobs whose history matters. Several unnamed jobs with the same kind and schedule get `#2`, `#3`, … in registration
-  order. To learn the kind, the leader calls `createArgs` once when it starts the enqueuer.
+  order. To learn the kind, the leader calls `createArgs` once when it starts the enqueuer. If that throws, the job is
+  skipped and logged until the next change of leader.
 - The definition stays in code: args, options and schedule come from the leader's registration. When the leader's
   schedule differs from the stored one, the stored one is replaced and the next run is recomputed from now.
 - They can be paused, resumed and listed at runtime like stored jobs. They can't be replaced at runtime. Deleting one
@@ -78,6 +79,7 @@ var page = await oxbow.ListPeriodicJobsAsync(new PeriodicJobListQuery { Limit = 
 - **`runOnStart`** enqueues the first run at once, instead of at the schedule's first occurrence. It applies when the
   job has no persisted state yet, not on every start or change of leader.
 - **Pausing.** Runs missed while a job is paused are skipped. On resume, the next run is the schedule's next occurrence.
+  A code-registered job's next run is computed by the leader from its registration, so a custom `TimeZoneInfo` works.
 - **Failures.** If a run's insert fails for a reason that won't fix itself (args that no longer deserialize, a
   middleware throwing, invalid options), the run is skipped and logged. A database outage delays the run until the
   leader can reach the database again. A stored schedule the leader can't parse gets no next run until it's replaced.

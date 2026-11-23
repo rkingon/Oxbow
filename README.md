@@ -149,6 +149,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_job, public.oxbow_queue, pu
 GRANT SELECT ON public.oxbow_migration TO app_role;
 GRANT USAGE ON SEQUENCE public.oxbow_job_id_seq TO app_role;
 GRANT EXECUTE ON FUNCTION public.oxbow_job_state_in_bitmask(bit(8), public.oxbow_job_state) TO app_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_periodic_job TO app_role;
 ```
 
 The test suite runs everything as such a role, next to a table with forced row-level security. Oxbow never calls
