@@ -294,7 +294,7 @@ which wakes the followers at once.
 | Service | Default | Behavior (River parity) |
 |---|---|---|
 | Scheduler | every 5 s | Moves due `scheduled` and `retryable` jobs to `available`, discarding unique-key conflicts as River's `JobSchedule` does, then NOTIFYs the affected queues. |
-| Rescuer | every 30 s, after 1 h | Takes `running` jobs with `attempted_at` older than the horizon. If cancel was attempted, they become cancelled; still inside their own timeout (when the leader knows the kind), left alone; otherwise retried with backoff or discarded by attempts. A kind the leader has no worker for is retried with the global policy, not discarded (see differences). Increments `metadata.oxbow:rescue_count`. |
+| Rescuer | every 30 s, after 1 h | Takes `running` jobs whose later of `attempted_at` and `metadata.oxbow:heartbeat_at` is older than the horizon. If cancel was attempted, they become cancelled; if the attempt heartbeated, rescued; still inside their own timeout (when the leader knows the kind), left alone; otherwise retried with backoff or discarded by attempts. A kind the leader has no worker for is retried with the global policy, not discarded (see differences). Increments `metadata.oxbow:rescue_count`. |
 | Job cleaner | every 30 s | Deletes `completed` older than 24 h, `cancelled` older than 24 h and `discarded` older than 7 d, in batches. A retention of `Timeout.InfiniteTimeSpan` keeps them forever. |
 | Queue cleaner | every 1 h | Deletes `{p}queue` rows not updated for 24 h. |
 | Periodic enqueuer | timer | See below. |

@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Heartbeat and progress: `Job<TArgs>.HeartbeatAsync` and `ReportProgressAsync`, stored as `oxbow:heartbeat_at` and
+  `oxbow:progress` in metadata and read through `JobRow.HeartbeatAt` and `JobRow.Progress`. The rescuer uses the later
+  of `attempted_at` and the heartbeat, so a healthy long job isn't rescued, and an attempt that heartbeats is rescued
+  once its heartbeats stop, even with no timeout. `WorkResult.Progress` in `Oxbow.Testing`.
+
 ### Changed
 
 - Schema version 2. Apply `OxbowSchema.GetMigrations(1, 2)` (or `AddOxbowSchema(version: 2)`, or `oxbow migrate`) and

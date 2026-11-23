@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Oxbow.Processing;
 
 namespace Oxbow.Internal;
 
@@ -35,6 +36,8 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
         public override DateTimeOffset? GetNextRetry() => worker.GetNextRetry(job);
 
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
+
+        public override void Attach(JobControl control) => job.Control = control;
     }
 }
 
@@ -47,6 +50,8 @@ internal abstract class WorkUnit
     public abstract DateTimeOffset? GetNextRetry();
 
     public abstract Task WorkAsync(CancellationToken cancellationToken);
+
+    public abstract void Attach(JobControl control);
 }
 
 /// <summary>Every registered worker by kind and alias, validated when first resolved (at host start).</summary>

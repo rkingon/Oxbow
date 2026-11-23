@@ -172,6 +172,10 @@ internal sealed class Maintenance(
             return (JobState.Cancelled, job.ScheduledAt, now);
         }
 
+        // GetStuck returns an attempt that heartbeats only once its heartbeat has gone quiet, so its timeout no longer
+        // says whether it may still be running.
+        var heartbeating = job.HeartbeatAt is { } heartbeatAt && job.AttemptedAt is { } started && heartbeatAt >= started;
+
         DateTimeOffset? nextRetry = null;
         if (workers.Find(job.Kind) is { } registration)
         {
@@ -184,7 +188,8 @@ internal sealed class Maintenance(
                     var timeout = unit.GetTimeout() ?? runtime.Options.JobTimeout;
 
                     // River: with no timeout, or one that hasn't elapsed, the job may still be legitimately running.
-                    if (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout))
+                    if (!heartbeating
+                        && (OxbowRuntime.IsInfinite(timeout) || (job.AttemptedAt is { } attemptedAt && now - attemptedAt < timeout)))
                     {
                         return null;
                     }

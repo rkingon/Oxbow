@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using Oxbow.Internal;
 
 namespace Oxbow;
 
@@ -52,4 +54,42 @@ public sealed class JobRow
 
     /// <summary>Tags attached at insert.</summary>
     public required IReadOnlyList<string> Tags { get; init; }
+
+    /// <summary>
+    /// The last heartbeat (<c>oxbow:heartbeat_at</c> in <see cref="Metadata"/>), from any attempt: compare it with
+    /// <see cref="AttemptedAt"/>.
+    /// </summary>
+    public DateTimeOffset? HeartbeatAt =>
+        Metadata.ValueKind == JsonValueKind.Object
+        && Metadata.TryGetProperty(MetadataKeys.HeartbeatAt, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+            ? at
+            : null;
+
+    /// <summary>
+    /// The last progress reported (<c>oxbow:progress</c> in <see cref="Metadata"/>), from any attempt: see
+    /// <see cref="JobProgress.Attempt"/>.
+    /// </summary>
+    public JobProgress? Progress
+    {
+        get
+        {
+            if (Metadata.ValueKind != JsonValueKind.Object
+                || !Metadata.TryGetProperty(MetadataKeys.Progress, out var value)
+                || value.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            try
+            {
+                return value.Deserialize(OxbowJsonContext.Default.JobProgress);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+    }
 }

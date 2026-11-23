@@ -20,5 +20,6 @@ Reference: River `main` at `1f19003`. Each entry gives what differs and why.
 | Bulk insert | `InsertMany` (unnest, returning rows) and `InsertManyFast` (COPY, count only) | Same split: `InsertManyAsync` (unnest, rows returned, unique jobs supported) and `InsertManyFastAsync` (binary COPY, count only, unique jobs rejected) | — (parity) |
 | EF insert | — | Throws without `Database.CurrentTransaction` | Otherwise the job commits ahead of `SaveChanges`. |
 | Tracing | None built in | `oxbow.insert`/`oxbow.work` spans; `traceparent` stored in metadata and linked | OpenTelemetry is the .NET convention. A link, not a parent, because work can run hours later. |
+| Heartbeat and progress | None; the rescuer judges a job by `attempted_at` and its timeout | `HeartbeatAsync` and `ReportProgressAsync` on the job, stored in metadata; the rescuer uses the later of `attempted_at` and the heartbeat, and judges an attempt that heartbeats by its heartbeat alone | Long jobs, jobs with no timeout, and kinds the leader doesn't run can't otherwise be told apart from dead ones. |
 | Rescue metadata key | `river:rescue_count` | `oxbow:rescue_count` | Namespace. |
 | Pausing an unknown queue | `QueuePause` returns not-found | Creates the queue row already paused | Lets a deploy pause a queue before any node has run it. |
