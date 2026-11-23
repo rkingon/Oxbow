@@ -93,6 +93,9 @@ public sealed class Job<TArgs>
         return Control?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
     }
 
+    /// <summary>The batch this job is a member or callback of.</summary>
+    public long? BatchId => Row.BatchId;
+
     /// <summary>The output recorded with <see cref="SetOutput"/>, not yet serialized.</summary>
     public object? Output => _output;
 

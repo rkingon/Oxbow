@@ -52,6 +52,9 @@ internal static partial class Log
     [LoggerMessage(16, LogLevel.Warning, "A cancellation callback threw while disposing Oxbow.")]
     public static partial void CancelCallbackFailed(ILogger logger, Exception exception);
 
+    [LoggerMessage(40, LogLevel.Error, "Finishing batch {BatchId} failed; retrying on the next pass.")]
+    public static partial void BatchFinishFailed(ILogger logger, Exception exception, long batchId);
+
     // 70–79: job output and discard handlers.
     [LoggerMessage(70, LogLevel.Error, "Discard handler {Handler} failed for job {JobId}.")]
     public static partial void DiscardHandlerFailed(ILogger logger, Exception exception, string handler, long jobId);

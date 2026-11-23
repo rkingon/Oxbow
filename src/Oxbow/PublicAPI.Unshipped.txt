@@ -4,6 +4,77 @@
 const Oxbow.OxbowSchema.LatestVersion = 2 -> int
 static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
 static Oxbow.OxbowSchema.GetGrants(string! role, int version, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
+Oxbow.Batch
+Oxbow.Batch.Batch() -> void
+Oxbow.Batch.Cancelled.get -> int
+Oxbow.Batch.Cancelled.init -> void
+Oxbow.Batch.Completed.get -> int
+Oxbow.Batch.Completed.init -> void
+Oxbow.Batch.CreatedAt.get -> System.DateTimeOffset
+Oxbow.Batch.CreatedAt.init -> void
+Oxbow.Batch.Discarded.get -> int
+Oxbow.Batch.Discarded.init -> void
+Oxbow.Batch.FinalizedAt.get -> System.DateTimeOffset?
+Oxbow.Batch.FinalizedAt.init -> void
+Oxbow.Batch.Id.get -> long
+Oxbow.Batch.Id.init -> void
+Oxbow.Batch.OnCompleteJobId.get -> long?
+Oxbow.Batch.OnCompleteJobId.init -> void
+Oxbow.Batch.OnSuccessJobId.get -> long?
+Oxbow.Batch.OnSuccessJobId.init -> void
+Oxbow.Batch.Remaining.get -> int
+Oxbow.Batch.Total.get -> int
+Oxbow.Batch.Total.init -> void
+Oxbow.BatchCallback
+Oxbow.BatchCallback.<Clone>$() -> Oxbow.BatchCallback!
+Oxbow.BatchCallback.Args.get -> Oxbow.IJobArgs!
+Oxbow.BatchCallback.Args.init -> void
+Oxbow.BatchCallback.BatchCallback(Oxbow.IJobArgs! Args, Oxbow.InsertOptions? Options = null) -> void
+Oxbow.BatchCallback.Deconstruct(out Oxbow.IJobArgs! Args, out Oxbow.InsertOptions? Options) -> void
+Oxbow.BatchCallback.Equals(Oxbow.BatchCallback? other) -> bool
+Oxbow.BatchCallback.Options.get -> Oxbow.InsertOptions?
+Oxbow.BatchCallback.Options.init -> void
+Oxbow.BatchInsertResult
+Oxbow.BatchInsertResult.<Clone>$() -> Oxbow.BatchInsertResult!
+Oxbow.BatchInsertResult.BatchId.get -> long
+Oxbow.BatchInsertResult.BatchId.init -> void
+Oxbow.BatchInsertResult.BatchInsertResult(long BatchId, System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>! Jobs) -> void
+Oxbow.BatchInsertResult.Deconstruct(out long BatchId, out System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>! Jobs) -> void
+Oxbow.BatchInsertResult.Equals(Oxbow.BatchInsertResult? other) -> bool
+Oxbow.BatchInsertResult.Jobs.get -> System.Collections.Generic.IReadOnlyList<Oxbow.InsertResult!>!
+Oxbow.BatchInsertResult.Jobs.init -> void
+Oxbow.BatchOptions
+Oxbow.BatchOptions.<Clone>$() -> Oxbow.BatchOptions!
+Oxbow.BatchOptions.BatchOptions() -> void
+Oxbow.BatchOptions.Equals(Oxbow.BatchOptions? other) -> bool
+Oxbow.BatchOptions.OnComplete.get -> Oxbow.BatchCallback?
+Oxbow.BatchOptions.OnComplete.init -> void
+Oxbow.BatchOptions.OnSuccess.get -> Oxbow.BatchCallback?
+Oxbow.BatchOptions.OnSuccess.init -> void
+Oxbow.IOxbowClient.GetBatchAsync(long id, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.Batch?>!
+Oxbow.IOxbowClient.InsertBatchAsync(Npgsql.NpgsqlConnection! connection, Npgsql.NpgsqlTransaction? transaction, System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, Oxbow.BatchOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.BatchInsertResult!>!
+Oxbow.IOxbowClient.InsertBatchAsync(System.Collections.Generic.IEnumerable<Oxbow.InsertManyItem!>! items, Oxbow.BatchOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Oxbow.BatchInsertResult!>!
+Oxbow.Job<TArgs>.BatchId.get -> long?
+Oxbow.JobListQuery.BatchId.get -> long?
+Oxbow.JobListQuery.BatchId.init -> void
+Oxbow.JobRow.BatchId.get -> long?
+Oxbow.OxbowOptions.BatchRetention.get -> System.TimeSpan
+Oxbow.OxbowOptions.BatchRetention.set -> void
+override Oxbow.BatchCallback.Equals(object? obj) -> bool
+override Oxbow.BatchCallback.GetHashCode() -> int
+override Oxbow.BatchCallback.ToString() -> string!
+override Oxbow.BatchInsertResult.Equals(object? obj) -> bool
+override Oxbow.BatchInsertResult.GetHashCode() -> int
+override Oxbow.BatchInsertResult.ToString() -> string!
+override Oxbow.BatchOptions.Equals(object? obj) -> bool
+override Oxbow.BatchOptions.GetHashCode() -> int
+override Oxbow.BatchOptions.ToString() -> string!
+static Oxbow.BatchCallback.operator !=(Oxbow.BatchCallback? left, Oxbow.BatchCallback? right) -> bool
+static Oxbow.BatchCallback.operator ==(Oxbow.BatchCallback? left, Oxbow.BatchCallback? right) -> bool
+static Oxbow.BatchInsertResult.operator !=(Oxbow.BatchInsertResult? left, Oxbow.BatchInsertResult? right) -> bool
+static Oxbow.BatchInsertResult.operator ==(Oxbow.BatchInsertResult? left, Oxbow.BatchInsertResult? right) -> bool
+static Oxbow.BatchOptions.operator !=(Oxbow.BatchOptions? left, Oxbow.BatchOptions? right) -> bool
+static Oxbow.BatchOptions.operator ==(Oxbow.BatchOptions? left, Oxbow.BatchOptions? right) -> bool
 Oxbow.EncryptArgsAttribute
 Oxbow.EncryptArgsAttribute.EncryptArgsAttribute() -> void
 Oxbow.IJobArgsProtector
