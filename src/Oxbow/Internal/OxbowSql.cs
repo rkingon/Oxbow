@@ -697,13 +697,14 @@ internal sealed class OxbowSql
                 FROM finished AS f, counts AS c
                 WHERE b.id = f.id
             )
-            SELECT queue, state FROM complete_job WHERE NOT duplicate
+            SELECT queue, state, sequence_key FROM complete_job WHERE NOT duplicate
             UNION ALL
-            SELECT queue, state FROM success_job WHERE NOT duplicate
+            SELECT queue, state, sequence_key FROM success_job WHERE NOT duplicate
             """;
 
         string InsertCallback(string column, string from, string condition, string callback) => $"""
-                INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states)
+                INSERT INTO {job} (args, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states,
+                    sequence_key, sequence_continue_on)
                 SELECT
                     f.{column} -> 'args',
                     f.{column} ->> 'kind',
@@ -712,10 +713,16 @@ internal sealed class OxbowSql
                     (f.{column} ->> 'priority')::smallint,
                     f.{column} ->> 'queue',
                     coalesce((f.{column} ->> 'scheduled_at')::timestamptz, now()),
-                    CASE WHEN (f.{column} ->> 'scheduled_at')::timestamptz > now() THEN 'scheduled' ELSE 'available' END::{state},
+                    CASE
+                        WHEN f.{column} ->> 'sequence_key' IS NOT NULL THEN 'pending'
+                        WHEN (f.{column} ->> 'scheduled_at')::timestamptz > now() THEN 'scheduled'
+                        ELSE 'available'
+                    END::{state},
                     ARRAY(SELECT jsonb_array_elements_text(f.{column} -> 'tags'))::varchar(255)[],
                     decode(f.{column} ->> 'unique_key', 'base64'),
-                    nullif((f.{column} ->> 'unique_states')::int, 0)::bit(8)
+                    nullif((f.{column} ->> 'unique_states')::int, 0)::bit(8),
+                    f.{column} ->> 'sequence_key',
+                    (f.{column} ->> 'sequence_continue_on')::smallint
                 FROM {from}
                 WHERE f.{column} IS NOT NULL AND {condition}
                 ON CONFLICT (unique_key)
@@ -723,7 +730,7 @@ internal sealed class OxbowSql
                       AND unique_states IS NOT NULL
                       AND {bitmask}(unique_states, state)
                     DO UPDATE SET kind = {prefix}job.kind
-                RETURNING id, queue, state::text AS state, (xmax <> 0) AS duplicate
+                RETURNING id, queue, state::text AS state, (xmax <> 0) AS duplicate, sequence_key
             """;
 
         // Unfinished, the counts come from the members, which the cleaner keeps while the batch row exists.
@@ -974,10 +981,11 @@ internal sealed class OxbowSql
 
     /// <summary>
     /// A cancelled or discarded sequence job that ran, and whose policy doesn't continue past that state, halts its
-    /// sequence. One that never started was only taken out of the line.
+    /// sequence. One that never started was only taken out of the line. attempted_at, not attempt: a snooze or soft
+    /// stop hands the first attempt back, but the job still ran.
     /// </summary>
     private static string Halts(string alias) =>
-        $"({alias}sequence_key IS NOT NULL AND {alias}state IN ('cancelled', 'discarded') AND {alias}attempt > 0 " +
+        $"({alias}sequence_key IS NOT NULL AND {alias}state IN ('cancelled', 'discarded') AND {alias}attempted_at IS NOT NULL " +
         $"AND (coalesce({alias}sequence_continue_on, 0) & CASE {alias}state WHEN 'cancelled' THEN 1 ELSE 2 END) = 0)";
 
     public string BatchNextId { get; }

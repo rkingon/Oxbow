@@ -12,7 +12,8 @@ public sealed record SeqArgs(
     int FailTimes = 0,
     int DelayMs = 0,
     string? Signal = null,
-    string? Await = null) : IJobArgs;
+    string? Await = null,
+    int SnoozeMs = 0) : IJobArgs;
 
 public sealed class SeqWorker(SequenceLog log) : IWorker<SeqArgs>
 {
@@ -24,6 +25,11 @@ public sealed class SeqWorker(SequenceLog log) : IWorker<SeqArgs>
             if (job.Args.Signal is { } signal)
             {
                 log.Signal(signal);
+            }
+
+            if (job.Args.SnoozeMs > 0 && !job.Metadata.TryGetProperty("snoozes", out _))
+            {
+                throw new JobSnoozeException(TimeSpan.FromMilliseconds(job.Args.SnoozeMs));
             }
 
             if (job.Args.Await is { } other)
@@ -113,6 +119,21 @@ public sealed class SequenceTests(PostgresFixture database)
         foreach (var id in ids)
         {
             await app.WaitForStateAsync(id, state, TimeSpan.FromSeconds(30));
+        }
+    }
+
+    private static async Task<T> WaitForAsync<T>(Func<Task<T>> read, Func<T, bool> done)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            var value = await read();
+            if (done(value))
+            {
+                return value;
+            }
+
+            await Task.Delay(50, cts.Token);
         }
     }
 
@@ -248,6 +269,65 @@ public sealed class SequenceTests(PostgresFixture database)
         await Task.Delay(1500);
         Assert.Equal(JobState.Cancelled, (await app.Client.GetAsync(head.Job.Id))!.State);
         Assert.Equal(JobState.Pending, (await app.Client.GetAsync(next.Job.Id))!.State);
+    }
+
+    [Fact]
+    public async Task A_head_that_snoozed_on_its_first_attempt_still_halts_when_cancelled()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var log = new SequenceLog();
+        await using var app = await StartWorkerAsync(prefix, log);
+        var key = NewKey();
+
+        var head = await app.Client.InsertAsync(new SeqArgs(key, 0, SnoozeMs: 3_600_000));
+        var next = await app.Client.InsertAsync(new SeqArgs(key, 1));
+        var snoozed = await app.WaitForStateAsync(head.Job.Id, JobState.Scheduled);
+        Assert.Equal(0, snoozed.Attempt);
+
+        await app.Client.CancelAsync(head.Job.Id);
+        await Task.Delay(1000);
+        Assert.Equal(JobState.Pending, (await app.Client.GetAsync(next.Job.Id))!.State);
+    }
+
+    [Fact]
+    public async Task A_batch_callback_joins_its_sequence()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var log = new SequenceLog();
+        await using var app = await StartWorkerAsync(prefix, log);
+        var key = NewKey();
+
+        var slow = await app.Client.InsertAsync(new SeqArgs(key, 0, DelayMs: 1500));
+        await WaitUntilAsync(() => Task.FromResult(log.Order(key).Length == 1));
+        var batch = await app.Client.InsertBatchAsync(
+            [new InsertManyItem(new SeqArgs(NewKey(), 0))],
+            new BatchOptions { OnComplete = new BatchCallback(new SeqArgs(key, 1)) });
+
+        var finished = await WaitForAsync(() => app.Client.GetBatchAsync(batch.BatchId), b => b?.OnCompleteJobId is not null);
+        var callback = await app.Client.GetAsync(finished!.OnCompleteJobId!.Value);
+        Assert.Equal(slow.Job.SequenceKey, callback!.SequenceKey);
+        await app.WaitForStateAsync(callback.Id, JobState.Completed);
+        Assert.Equal([0, 1], log.Order(key));
+        Assert.Equal(0, log.Overlaps);
+    }
+
+    [Fact]
+    public async Task Downgrading_releases_pending_sequence_jobs()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var key = NewKey();
+
+        var now = await app.Client.InsertAsync(new RecordArgs("now"), new InsertOptions { SequenceKey = key });
+        var later = await app.Client.InsertAsync(
+            new RecordArgs("later"), new InsertOptions { SequenceKey = NewKey(), ScheduledAt = DateTimeOffset.UtcNow.AddHours(1) });
+        foreach (var migration in OxbowSchema.GetMigrations(2, 1, tablePrefix: prefix))
+        {
+            await database.ExecuteAsOwnerAsync(migration.Sql);
+        }
+
+        Assert.Equal("available", await database.ScalarAsOwnerAsync<string>($"SELECT state::text FROM public.{prefix}job WHERE id = {now.Job.Id}"));
+        Assert.Equal("scheduled", await database.ScalarAsOwnerAsync<string>($"SELECT state::text FROM public.{prefix}job WHERE id = {later.Job.Id}"));
     }
 
     [Fact]

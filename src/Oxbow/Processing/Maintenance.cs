@@ -391,6 +391,7 @@ internal sealed class Maintenance(
 
             // One statement per batch, so a batch whose callback can't be inserted doesn't hold up the others.
             var queues = new HashSet<string>(StringComparer.Ordinal);
+            var sequences = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in candidates)
             {
                 try
@@ -409,6 +410,11 @@ internal sealed class Maintenance(
                                 {
                                     queues.Add(reader.GetString(0));
                                 }
+
+                                if (!reader.IsDBNull(2))
+                                {
+                                    sequences.Add(reader.GetString(2));
+                                }
                             }
                         }
                     }
@@ -424,6 +430,7 @@ internal sealed class Maintenance(
                 await NotifyQueuesAsync(queues, cancellationToken).ConfigureAwait(false);
             }
 
+            await PromoteAsync(sequences, cancellationToken).ConfigureAwait(false);
             if (candidates.Count < BatchSize)
             {
                 return;

@@ -50,7 +50,7 @@ await oxbow.RetryManyAsync(new JobFilter { SequenceKey = key, States = [JobState
 
 ## Failures halt the sequence
 
-A sequence job that **ran** (attempt ≥ 1) and ended `discarded` or `cancelled` halts its sequence: the jobs behind it
+A sequence job that **ran** (was fetched at least once, even if it snoozed or was interrupted) and ended `discarded` or `cancelled` halts its sequence: the jobs behind it
 stay `pending`. To move on:
 
 - `RetryAsync(id)` on the halted job. It goes back to `pending` and, being the oldest, runs next.
@@ -77,6 +77,11 @@ never halts the sequence.
   committed. If two transactions insert into the same sequence and the one with the higher ids commits first, its jobs
   can run before the other's. Each transaction's own jobs keep their order, and jobs never overlap. Callers that
   serialize on the entity (e.g. `SELECT … FOR UPDATE` on its row) get commit order and id order alike.
+
+## Downgrading
+
+The version 2 down script releases pending sequence jobs (`available`, or `scheduled` if due later) before dropping the
+columns, since version 1 never promotes them. They then run without ordering.
 
 ## Mixed-version fleets
 

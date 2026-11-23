@@ -22,7 +22,9 @@ internal static class SequencePromoter
             return [];
         }
 
+        // Postgres truncates identifiers to 63 bytes, and so the name it reports; prefixes are ASCII.
         var liveIndex = runtime.Options.TablePrefix + "job_sequence_live_idx";
+        liveIndex = liveIndex[..Math.Min(liveIndex.Length, 63)];
         for (var attempt = 1; ; attempt++)
         {
             try

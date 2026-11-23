@@ -366,6 +366,8 @@ internal sealed partial class OxbowClient(
             ["scheduled_at"] = job.ScheduledAt?.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'", CultureInfo.InvariantCulture),
             ["unique_key"] = job.UniqueKey is null ? null : Convert.ToBase64String(job.UniqueKey),
             ["unique_states"] = job.UniqueStates,
+            ["sequence_key"] = job.SequenceKey,
+            ["sequence_continue_on"] = job.SequenceKey is null ? null : (int)job.SequenceContinueOn,
         }.ToJsonString();
     }
 

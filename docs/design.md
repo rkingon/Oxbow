@@ -338,7 +338,7 @@ Run-on-start applies only to a job's first run. See [periodic jobs](scheduled-an
 
 Sequence jobs (`sequence_key` set) are inserted `pending` and only ever become live (`available`, `scheduled`,
 `running`, `retryable`) through promotion: the oldest pending job of a sequence goes `available` (or `scheduled`) when
-the sequence has no live job and no halting job (cancelled or discarded with `attempt > 0`, unless
+the sequence has no live job and no halting job (cancelled or discarded with `attempted_at` set, unless
 `sequence_continue_on` covers that state). A partial unique index on `sequence_key` over the live states makes "at most
 one live job per sequence" a database invariant, so promoters need no lock: one that races on a stale snapshot hits the
 index, and retries on a fresh snapshot (up to three times, then leaves it to the sweep).
