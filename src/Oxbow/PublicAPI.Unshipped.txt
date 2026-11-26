@@ -1,5 +1,1 @@
 #nullable enable
-Oxbow.JobRetryException (forwarded, contained in Oxbow.Abstractions)
-Oxbow.JobRetryException.Delay.get -> System.TimeSpan (forwarded, contained in Oxbow.Abstractions)
-Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void (forwarded, contained in Oxbow.Abstractions)
-Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void (forwarded, contained in Oxbow.Abstractions)

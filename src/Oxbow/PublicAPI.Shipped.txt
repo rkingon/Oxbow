@@ -667,3 +667,7 @@ virtual Oxbow.JobFilter.EqualityContract.get -> System.Type! (forwarded, contain
 virtual Oxbow.JobFilter.Equals(Oxbow.JobFilter? other) -> bool (forwarded, contained in Oxbow.Abstractions)
 virtual Oxbow.JobFilter.PrintMembers(System.Text.StringBuilder! builder) -> bool (forwarded, contained in Oxbow.Abstractions)
 virtual Oxbow.JobWorkDelegate.Invoke(Oxbow.JobContext! context) -> System.Threading.Tasks.Task! (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobRetryException (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobRetryException.Delay.get -> System.TimeSpan (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void (forwarded, contained in Oxbow.Abstractions)

@@ -1,5 +1,1 @@
 #nullable enable
-Oxbow.JobRetryException
-Oxbow.JobRetryException.Delay.get -> System.TimeSpan
-Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void
-Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void

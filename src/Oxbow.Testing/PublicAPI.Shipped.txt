@@ -142,3 +142,5 @@ static Oxbow.Testing.RecordedJob.operator !=(Oxbow.Testing.RecordedJob? left, Ox
 static Oxbow.Testing.RecordedJob.operator ==(Oxbow.Testing.RecordedJob? left, Oxbow.Testing.RecordedJob? right) -> bool
 static Oxbow.Testing.RecordedProgress.operator !=(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
 static Oxbow.Testing.RecordedProgress.operator ==(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
+Oxbow.Testing.WorkResult.RetryDelay.get -> System.TimeSpan?
+Oxbow.Testing.WorkResult.RetryDelay.init -> void

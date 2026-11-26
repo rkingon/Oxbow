@@ -405,3 +405,7 @@ Oxbow.IJobRuntime.HeartbeatAsync(System.Threading.CancellationToken cancellation
 Oxbow.IJobRuntime.ReportProgressAsync(double percent, string? message, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Oxbow.IJobRuntime.UtcNow.get -> System.DateTimeOffset
 Oxbow.Job<TArgs>.Job(Oxbow.JobRow! row, TArgs args, Oxbow.IJobRuntime! runtime) -> void
+Oxbow.JobRetryException
+Oxbow.JobRetryException.Delay.get -> System.TimeSpan
+Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void
+Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void
