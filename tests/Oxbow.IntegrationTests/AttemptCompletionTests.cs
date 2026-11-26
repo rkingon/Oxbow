@@ -67,11 +67,10 @@ public sealed class AttemptCompletionTests(PostgresFixture database)
             register: b => b.AddWorker<RecordArgs, RecordWorker>(), start: false);
         var id = (await app.Client.InsertAsync(new RecordArgs("batch"))).Job.Id;
         await using var claim = app.DataSource.CreateCommand(
-            $"UPDATE public.{app.Prefix}job SET state='running', attempt=2, attempted_at=now() WHERE id=@id");
+            $"UPDATE public.{app.Prefix}job SET state='running', attempt=2, attempted_at=now() WHERE id=@id RETURNING attempted_at");
         claim.Parameters.AddWithValue("id", id);
-        Assert.Equal(1, await claim.ExecuteNonQueryAsync());
+        var current = new DateTimeOffset(Assert.IsType<DateTime>(await claim.ExecuteScalarAsync()));
 
-        var current = (await app.Client.GetAsync(id))!.AttemptedAt!.Value;
         var completer = new Completer(app.Host.Services.GetRequiredService<OxbowRuntime>(), NullLogger.Instance);
         var completed = await completer.EnqueueAsync(new SetStateParams(id, current.AddSeconds(-1), JobState.Completed) { FinalizedAt = DateTimeOffset.UtcNow });
         var cancelled = await completer.EnqueueAsync(new SetStateParams(id, current, JobState.Cancelled) { FinalizedAt = DateTimeOffset.UtcNow });
