@@ -238,8 +238,8 @@ CancelAsync on available/scheduled/retryable ─► cancelled
 insert with a sequence key ──► pending ──promoter──► available / scheduled  (see Sequences)
 ```
 
-Every completion goes through River's `JobSetStateIfRunningMany`, which only moves a job that is still `running`. If
-`cancel_attempted_at` is set, a requested retry, snooze or soft stop becomes `cancelled`, while a successful completion
+Oxbow's batch completion query checks that the job is still `running` with the claimed `attempted_at` before writing
+state or metadata. If `cancel_attempted_at` is set, a requested retry, snooze or soft stop becomes `cancelled`, while a successful completion
 stays `completed` (the worker chose to finish). When the next run is due within the scheduler interval, the job goes
 straight to `available` rather than through `retryable`/`scheduled`, as River does. `errors` gets one entry per failed
 attempt: `{ at, attempt, error: "{ExceptionType}: {Message}", trace }`.

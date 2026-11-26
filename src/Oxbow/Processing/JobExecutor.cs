@@ -69,9 +69,11 @@ internal sealed class JobExecutor(
         OxbowDiagnostics.JobQueueWait.Record(Math.Max(0, (start - row.ScheduledAt).TotalSeconds), tags);
 
         using var activity = StartActivity(row);
+        AsyncServiceScope? scope = null;
         WorkUnit? unit = null;
         Exception? error = null;
         string? output = null;
+        var now = start;
         var timeout = runtime.Options.JobTimeout;
         CancellationTokenSource? timeoutSource = null;
         try
@@ -83,34 +85,32 @@ internal sealed class JobExecutor(
                 throw new UnknownJobKindException(row.Kind);
             }
 
-            var scope = scopes.CreateAsyncScope();
-            await using (scope.ConfigureAwait(false))
+            scope = scopes.CreateAsyncScope();
+            var services = scope.Value.ServiceProvider;
+            unit = registration.CreateUnit(
+                row, services, runtime.Json, runtime.ArgsProtector, new JobControl(runtime, row, timeProvider));
+            timeout = unit.GetTimeout() ?? timeout;
+            timeoutSource = timeout > TimeSpan.Zero && !OxbowRuntime.IsInfinite(timeout)
+                ? new CancellationTokenSource(timeout, timeProvider)
+                : new CancellationTokenSource();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                workToken, running.RemoteCancelToken, timeoutSource.Token);
+
+            var context = new JobContext(row, unit.Args, services, linked.Token);
+            var workUnit = unit;
+            JobWorkDelegate pipeline = ctx => workUnit.WorkAsync(ctx.CancellationToken);
+            var middleware = services.GetServices<IJobWorkMiddleware>().ToArray();
+            for (var i = middleware.Length - 1; i >= 0; i--)
             {
-                unit = registration.CreateUnit(
-                    row, scope.ServiceProvider, runtime.Json, runtime.ArgsProtector, new JobControl(runtime, row, timeProvider));
-                timeout = unit.GetTimeout() ?? timeout;
-                timeoutSource = timeout > TimeSpan.Zero && !OxbowRuntime.IsInfinite(timeout)
-                    ? new CancellationTokenSource(timeout, timeProvider)
-                    : new CancellationTokenSource();
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                    workToken, running.RemoteCancelToken, timeoutSource.Token);
+                var current = middleware[i];
+                var next = pipeline;
+                pipeline = ctx => current.InvokeAsync(ctx, next);
+            }
 
-                var context = new JobContext(row, unit.Args, scope.ServiceProvider, linked.Token);
-                var workUnit = unit;
-                JobWorkDelegate pipeline = ctx => workUnit.WorkAsync(ctx.CancellationToken);
-                var middleware = scope.ServiceProvider.GetServices<IJobWorkMiddleware>().ToArray();
-                for (var i = middleware.Length - 1; i >= 0; i--)
-                {
-                    var current = middleware[i];
-                    var next = pipeline;
-                    pipeline = ctx => current.InvokeAsync(ctx, next);
-                }
-
-                await pipeline(context).ConfigureAwait(false);
-                if (unit.Output is { } value)
-                {
-                    output = JobOutput.ToMetadataUpdate(value, runtime.Json);
-                }
+            await pipeline(context).ConfigureAwait(false);
+            if (unit.Output is { } value)
+            {
+                output = JobOutput.ToMetadataUpdate(value, runtime.Json);
             }
         }
 #pragma warning disable CA1031 // A worker must never take the host down.
@@ -120,26 +120,57 @@ internal sealed class JobExecutor(
             error = ex;
         }
 
-        var now = timeProvider.GetUtcNow();
-        var cancellation = new CancellationSources(
-            workToken.IsCancellationRequested,
-            running.RemoteCancelToken.IsCancellationRequested,
-            timeoutSource?.IsCancellationRequested == true);
-        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation, activity).ConfigureAwait(false);
-        timeoutSource?.Dispose();
+        using var ownedTimeout = timeoutSource;
+        (string Name, SetStateParams Update)? outcome = null;
+        try
+        {
+            if (error is not null && unit is not null)
+            {
+                outcome = Decide(unit);
+            }
+        }
+        finally
+        {
+            if (scope is { } workerScope)
+            {
+                try
+                {
+                    await workerScope.DisposeAsync().ConfigureAwait(false);
+                }
+#pragma warning disable CA1031 // Scope disposal is part of the attempt and can itself fail.
+                catch (Exception ex)
+#pragma warning restore CA1031
+                {
+                    error = ex;
+                    outcome = null;
+                }
+            }
+        }
 
-        tags.Add("outcome", outcome);
+        var result = outcome ?? Decide(null);
+        await EnqueueAsync(running, error, result.Update).ConfigureAwait(false);
+        tags.Add("outcome", result.Name);
         OxbowDiagnostics.JobsFinished.Add(1, tags);
         OxbowDiagnostics.JobDuration.Record((now - start).TotalSeconds, tags);
-        activity?.SetTag("oxbow.job.outcome", outcome);
-        if (error is not null && outcome is "errored" or "discarded")
+        activity?.SetTag("oxbow.job.outcome", result.Name);
+        if (error is not null && result.Name is "errored" or "discarded")
         {
             activity?.SetStatus(ActivityStatusCode.Error, error.Message);
         }
+
+        (string, SetStateParams) Decide(WorkUnit? unit)
+        {
+            now = timeProvider.GetUtcNow();
+            var cancellation = new CancellationSources(
+                workToken.IsCancellationRequested,
+                running.RemoteCancelToken.IsCancellationRequested,
+                timeoutSource?.IsCancellationRequested == true);
+            return GetOutcome(row, unit, error, output, start, now, timeout, cancellation, activity);
+        }
     }
 
-    private async Task<string> ReportAsync(
-        RunningJob running,
+    private (string Name, SetStateParams Update) GetOutcome(
+        JobRow row,
         WorkUnit? unit,
         Exception? error,
         string? output,
@@ -149,12 +180,10 @@ internal sealed class JobExecutor(
         CancellationSources cancellation,
         Activity? activity)
     {
-        var row = running.Row;
+        var attemptedAt = row.AttemptedAt!.Value;
         if (error is null)
         {
-            await EnqueueAsync(running, null, new SetStateParams(row.Id, JobState.Completed) { FinalizedAt = now, MetadataUpdates = output })
-                .ConfigureAwait(false);
-            return "completed";
+            return ("completed", new SetStateParams(row.Id, attemptedAt, JobState.Completed) { FinalizedAt = now, MetadataUpdates = output });
         }
 
         if (error is JobSnoozeException snooze)
@@ -162,24 +191,22 @@ internal sealed class JobExecutor(
             var snoozes = row.Metadata.TryGetProperty("snoozes", out var count) && count.ValueKind == JsonValueKind.Number
                 ? count.GetInt64() + 1
                 : 1;
-            await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
+            return ("snoozed", new SetStateParams(row.Id, attemptedAt, StateFor(snooze.Duration, JobState.Scheduled))
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = After(now, snooze.Duration),
                 MetadataUpdates = new JsonObject { ["snoozes"] = snoozes }.ToJsonString(),
-            }).ConfigureAwait(false);
-            return "snoozed";
+            });
         }
 
         if (cancellation.Shutdown && error is OperationCanceledException)
         {
             // Soft stop at shutdown: back to available without spending the attempt.
-            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Available)
+            return ("interrupted", new SetStateParams(row.Id, attemptedAt, JobState.Available)
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
                 ScheduledAt = now,
-            }).ConfigureAwait(false);
-            return "interrupted";
+            });
         }
 
         var message = error switch
@@ -197,41 +224,37 @@ internal sealed class JobExecutor(
 
         if (error is JobCancelException)
         {
-            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Cancelled) { Error = attemptError, FinalizedAt = now })
-                .ConfigureAwait(false);
-            return "cancelled";
+            return ("cancelled", new SetStateParams(row.Id, attemptedAt, JobState.Cancelled) { Error = attemptError, FinalizedAt = now });
         }
 
         if (row.Attempt >= row.MaxAttempts)
         {
-            await EnqueueAsync(running, error, new SetStateParams(row.Id, JobState.Discarded) { Error = attemptError, FinalizedAt = now })
-                .ConfigureAwait(false);
-            return "discarded";
+            return ("discarded", new SetStateParams(row.Id, attemptedAt, JobState.Discarded) { Error = attemptError, FinalizedAt = now });
         }
 
         var nextRetry = error is JobRetryException retry
             ? After(now, retry.Delay)
-            : unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
+            : unit?.GetNextRetry(logger) ?? retryPolicy.NextRetry(row);
         if (nextRetry < now)
         {
             Log.RetryInPast(logger, nextRetry, row.Id);
             nextRetry = _fallbackRetryPolicy.NextRetry(row);
         }
 
-        await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(nextRetry - now, JobState.Retryable))
+        var update = new SetStateParams(row.Id, attemptedAt, StateFor(nextRetry - now, JobState.Retryable))
         {
             Error = attemptError,
             ScheduledAt = nextRetry,
-        }).ConfigureAwait(false);
+        };
 
         // A cancel request turns the retry into a cancellation when the outcome is written.
         if (cancellation.Remote)
         {
-            return "cancelled";
+            return ("cancelled", update);
         }
 
         activity?.SetTag("oxbow.job.retry_delay", (nextRetry - now).TotalSeconds);
-        return "errored";
+        return ("errored", update);
     }
 
     /// <summary>

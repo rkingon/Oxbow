@@ -8,7 +8,7 @@ using Oxbow.Internal;
 namespace Oxbow.Processing;
 
 /// <summary>A state change for a job that is still running. Fields left null aren't updated.</summary>
-internal sealed record SetStateParams(long Id, JobState State)
+internal sealed record SetStateParams(long Id, DateTimeOffset AttemptedAt, JobState State)
 {
     public int? Attempt { get; init; }
 
@@ -23,9 +23,8 @@ internal sealed record SetStateParams(long Id, JobState State)
 
 /// <summary>
 /// River's batch completer: attempt outcomes are queued and written in batches with the set-state-if-running query, so
-/// finishing a job doesn't cost a round trip of its own. A job's slot is freed as soon as its outcome is queued; the job
-/// stays running in the database until the batch is written, so it can't be fetched again in between. A node that dies
-/// with queued outcomes leaves those jobs running for the rescuer.
+/// finishing a job doesn't cost a round trip of its own. The worker slot is freed when the outcome is queued.
+/// If rescue supersedes the attempt before the write, its queued outcome is ignored.
 /// </summary>
 internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
 {
@@ -39,7 +38,7 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
     private readonly Channel<Pending> _queue = Channel.CreateBounded<Pending>(
         new BoundedChannelOptions(MaxBacklog) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
 
-    /// <summary>Queues an outcome. The task completes when it's written, with the job's resulting state.</summary>
+    /// <summary>Queues an outcome. The task completes when it's written, with the resulting state, or null for an unconfirmed or superseded write.</summary>
     public async ValueTask<Task<JobState?>> EnqueueAsync(SetStateParams update)
     {
         var pending = new Pending(update, new TaskCompletionSource<JobState?>(TaskCreationOptions.RunContinuationsAsynchronously));
@@ -99,9 +98,9 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
             try
             {
                 var (states, freedSequences) = await ExecuteAsync(batch, timeout.Token).ConfigureAwait(false);
-                foreach (var pending in batch)
+                for (var i = 0; i < batch.Count; i++)
                 {
-                    pending.Written.TrySetResult(states.TryGetValue(pending.Update.Id, out var state) ? state : null);
+                    batch[i].Written.TrySetResult(states[i]);
                 }
 
                 await PromoteAsync(freedSequences).ConfigureAwait(false);
@@ -147,7 +146,7 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
         }
     }
 
-    private async Task<(Dictionary<long, JobState> States, HashSet<string> FreedSequences)> ExecuteAsync(
+    private async Task<(JobState?[] States, HashSet<string> FreedSequences)> ExecuteAsync(
         List<Pending> batch,
         CancellationToken cancellationToken)
     {
@@ -158,6 +157,7 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
         {
             var p = command.Parameters;
             p.Add(new NpgsqlParameter<long[]>("id", updates.Select(u => u.Id).ToArray()));
+            p.Add(new NpgsqlParameter<DateTimeOffset[]>("attempted_at", updates.Select(u => u.AttemptedAt).ToArray()));
             p.Add(new NpgsqlParameter<bool[]>("attempt_do_update", updates.Select(u => u.Attempt is not null).ToArray()));
             p.Add(new NpgsqlParameter<int[]>("attempt", updates.Select(u => u.Attempt ?? 0).ToArray()));
             p.Add(new NpgsqlParameter<bool[]>("errors_do_update", updates.Select(u => u.Error is not null).ToArray()));
@@ -176,7 +176,7 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
             });
             p.Add(OxbowClient.TextArray("state", updates.Select(u => JobStates.ToDb(u.State)).ToArray()));
 
-            var states = new Dictionary<long, JobState>(updates.Length);
+            var states = new JobState?[updates.Length];
             var freedSequences = new HashSet<string>(StringComparer.Ordinal);
             var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await using (reader.ConfigureAwait(false))
@@ -184,10 +184,10 @@ internal sealed class Completer(OxbowRuntime runtime, ILogger logger)
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
                     var state = JobStates.Parse(reader.GetString(1));
-                    states[reader.GetInt64(0)] = state;
-                    if ((state is JobState.Completed or JobState.Cancelled or JobState.Discarded) && !reader.IsDBNull(4))
+                    states[reader.GetInt32(0)] = state;
+                    if ((state is JobState.Completed or JobState.Cancelled or JobState.Discarded) && !reader.IsDBNull(2))
                     {
-                        freedSequences.Add(reader.GetString(4));
+                        freedSequences.Add(reader.GetString(2));
                     }
                 }
             }
