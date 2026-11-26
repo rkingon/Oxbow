@@ -52,6 +52,9 @@ internal static partial class Log
     [LoggerMessage(16, LogLevel.Warning, "A cancellation callback threw while disposing Oxbow.")]
     public static partial void CancelCallbackFailed(ILogger logger, Exception exception);
 
+    [LoggerMessage(17, LogLevel.Warning, "GetNextRetry failed for job {JobId}. Using the configured retry policy.")]
+    public static partial void WorkerRetryFailed(ILogger logger, Exception exception, long jobId);
+
     [LoggerMessage(40, LogLevel.Error, "Finishing batch {BatchId} failed; retrying on the next pass.")]
     public static partial void BatchFinishFailed(ILogger logger, Exception exception, long batchId);
 

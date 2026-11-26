@@ -261,67 +261,36 @@ internal sealed class OxbowSql
         // cancellation was requested becomes a cancellation instead.
         SetStateIfRunning = $"""
             WITH input AS (
-                SELECT
-                    unnest(@id::bigint[]) AS id,
-                    unnest(@attempt_do_update::boolean[]) AS attempt_do_update,
-                    unnest(@attempt::int[]) AS attempt,
-                    unnest(@errors_do_update::boolean[]) AS errors_do_update,
-                    unnest(@errors::text[])::jsonb AS errors,
-                    unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
-                    unnest(@finalized_at::timestamptz[]) AS finalized_at,
-                    unnest(@metadata_do_merge::boolean[]) AS metadata_do_merge,
-                    unnest(@metadata_updates::text[])::jsonb AS metadata_updates,
-                    unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
-                    unnest(@scheduled_at::timestamptz[]) AS scheduled_at,
-                    unnest(@state::text[])::{state} AS state
-            ),
-            updated AS (
-                UPDATE {job} AS j
-                SET
-                    attempt = CASE
-                        WHEN j.state = 'running'
-                             AND NOT (input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at')
-                             AND input.attempt_do_update
-                        THEN input.attempt
-                        ELSE j.attempt
-                    END,
-                    errors = CASE
-                        WHEN j.state = 'running' AND input.errors_do_update
-                        THEN array_append(j.errors, input.errors)
-                        ELSE j.errors
-                    END,
-                    finalized_at = CASE
-                        WHEN j.state = 'running'
-                             AND input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at'
-                        THEN now()
-                        WHEN j.state = 'running' AND input.finalized_at_do_update
-                        THEN input.finalized_at
-                        ELSE j.finalized_at
-                    END,
-                    metadata = CASE
-                        WHEN input.metadata_do_merge THEN j.metadata || input.metadata_updates
-                        ELSE j.metadata
-                    END,
-                    scheduled_at = CASE
-                        WHEN j.state = 'running'
-                             AND NOT (input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at')
-                             AND input.scheduled_at_do_update
-                        THEN input.scheduled_at
-                        ELSE j.scheduled_at
-                    END,
-                    state = CASE
-                        WHEN j.state = 'running'
-                             AND input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at'
-                        THEN 'cancelled'::{state}
-                        WHEN j.state = 'running' THEN input.state
-                        ELSE j.state
-                    END
-                FROM input
-                WHERE j.id = input.id
-                  AND (j.state = 'running' OR input.metadata_do_merge)
-                RETURNING j.id, j.state::text AS state, j.queue, j.kind, j.sequence_key
+                SELECT * FROM unnest(
+                    @id::bigint[], @attempted_at::timestamptz[], @attempt_do_update::boolean[], @attempt::int[],
+                    @errors_do_update::boolean[], @errors::text[], @finalized_at_do_update::boolean[], @finalized_at::timestamptz[],
+                    @metadata_do_merge::boolean[], @metadata_updates::text[], @scheduled_at_do_update::boolean[],
+                    @scheduled_at::timestamptz[], @state::text[]
+                ) WITH ORDINALITY AS u(id, attempted_at, attempt_do_update, attempt, errors_do_update, errors,
+                    finalized_at_do_update, finalized_at, metadata_do_merge, metadata_updates, scheduled_at_do_update,
+                    scheduled_at, state, ordinal)
             )
-            SELECT id, state, queue, kind, sequence_key FROM updated
+            UPDATE {job} AS j
+            SET
+                attempt = CASE
+                    WHEN input.attempt_do_update
+                         AND NOT (input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at')
+                    THEN input.attempt ELSE j.attempt END,
+                errors = CASE WHEN input.errors_do_update THEN array_append(j.errors, input.errors::jsonb) ELSE j.errors END,
+                finalized_at = CASE
+                    WHEN input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at' THEN now()
+                    WHEN input.finalized_at_do_update THEN input.finalized_at ELSE j.finalized_at END,
+                metadata = CASE WHEN input.metadata_do_merge THEN j.metadata || input.metadata_updates::jsonb ELSE j.metadata END,
+                scheduled_at = CASE
+                    WHEN input.scheduled_at_do_update
+                         AND NOT (input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at')
+                    THEN input.scheduled_at ELSE j.scheduled_at END,
+                state = CASE
+                    WHEN input.state IN ('available', 'retryable', 'scheduled') AND j.metadata ? 'cancel_attempted_at'
+                    THEN 'cancelled'::{state} ELSE input.state::{state} END
+            FROM input
+            WHERE j.id = input.id AND j.state = 'running' AND j.attempted_at = input.attempted_at
+            RETURNING input.ordinal::int - 1, j.state::text, j.sequence_key
             """;
 
         Cancel = $"""

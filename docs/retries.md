@@ -18,6 +18,9 @@ or for every job, by registering your own `IRetryPolicy`:
 services.AddSingleton<IRetryPolicy, LinearRetryPolicy>();
 ```
 
+Oxbow calls `GetNextRetry` while the worker’s scope is alive. If the callback throws, Oxbow logs the callback failure
+and uses the configured retry policy. The job’s error history retains the original work failure.
+
 A retry time in the past falls back to the default policy, with a warning.
 
 ## A delay chosen at run time

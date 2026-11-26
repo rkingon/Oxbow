@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Oxbow.Processing;
 
 namespace Oxbow.Internal;
 
@@ -32,7 +34,20 @@ internal sealed class WorkerRegistration<TArgs, TWorker> : WorkerRegistration
 
         public override TimeSpan? GetTimeout() => worker.GetTimeout(job);
 
-        public override DateTimeOffset? GetNextRetry() => worker.GetNextRetry(job);
+        public override DateTimeOffset? GetNextRetry(ILogger logger)
+        {
+            try
+            {
+                return worker.GetNextRetry(job);
+            }
+#pragma warning disable CA1031 // A failed worker callback falls through to the configured retry policy.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                Log.WorkerRetryFailed(logger, ex, job.Id);
+                return null;
+            }
+        }
 
         public override Task WorkAsync(CancellationToken cancellationToken) => worker.WorkAsync(job, cancellationToken);
 
@@ -46,7 +61,7 @@ internal abstract class WorkUnit
 
     public abstract TimeSpan? GetTimeout();
 
-    public abstract DateTimeOffset? GetNextRetry();
+    public abstract DateTimeOffset? GetNextRetry(ILogger logger);
 
     public abstract Task WorkAsync(CancellationToken cancellationToken);
 

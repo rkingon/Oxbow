@@ -306,7 +306,10 @@ internal sealed class Maintenance(
                         return null;
                     }
 
-                    nextRetry = unit.GetNextRetry();
+                    if (job.Attempt < job.MaxAttempts)
+                    {
+                        nextRetry = unit.GetNextRetry(logger);
+                    }
                 }
                 catch (JsonException)
                 {
