@@ -7,7 +7,10 @@
 | Span | Kind | Tags |
 |---|---|---|
 | `oxbow.insert` | Producer | `oxbow.jobs.count` |
-| `oxbow.work` | Consumer | `oxbow.job.id`, `oxbow.job.kind`, `oxbow.job.queue`, `oxbow.job.attempt`, `oxbow.job.outcome` |
+| `oxbow.work` | Consumer | `oxbow.job.id`, `oxbow.job.kind`, `oxbow.job.queue`, `oxbow.job.attempt`, `oxbow.job.outcome`, `oxbow.job.retry_delay` |
+
+A failed attempt that will be retried has outcome `errored` and `oxbow.job.retry_delay`: the seconds until its next
+attempt, whether the retry policy, `GetNextRetry` or a `JobRetryException` chose it.
 
 When an insert is traced, its `traceparent` is stored in the job's metadata, and the work span **links** to it. It's
 a link rather than a parent because the work can happen hours later, on another node.

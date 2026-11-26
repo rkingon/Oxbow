@@ -51,8 +51,9 @@ Assert.Equal("sent", result.Output?.GetProperty("status").GetString());  // what
 ```
 
 The harness opens a DI scope, runs your registered work middleware, applies the worker's timeout, and reports what
-Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`. `result.Progress` is the progress the
-worker last reported; heartbeats do nothing.
+Oxbow would record: `Completed`, `Errored`, `Snoozed`, `Cancelled` or `TimedOut`. A worker that throws
+`JobRetryException` is `Errored`, with its delay in `result.RetryDelay`. `result.Progress` is the progress the worker
+last reported; heartbeats do nothing.
 
 To call a worker directly instead, create the job with a `RecordingJobRuntime` to see its heartbeats and every progress
 report:

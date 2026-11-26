@@ -83,6 +83,10 @@ public sealed class WorkerHarness<TArgs, TWorker>(IServiceProvider services)
             {
                 result = new WorkResult(WorkOutcome.Snoozed, ex, ex.Duration);
             }
+            catch (JobRetryException ex)
+            {
+                result = new WorkResult(WorkOutcome.Errored, ex, null) { RetryDelay = ex.Delay };
+            }
             catch (JobCancelException ex)
             {
                 result = new WorkResult(WorkOutcome.Cancelled, ex, null);
@@ -131,7 +135,10 @@ public enum WorkOutcome
     /// <summary>Returned normally; Oxbow would complete the job.</summary>
     Completed,
 
-    /// <summary>Threw; Oxbow would retry or discard the job.</summary>
+    /// <summary>
+    /// Threw; Oxbow would retry or discard the job. <see cref="WorkResult.RetryDelay"/> is set if it threw
+    /// <see cref="JobRetryException"/>.
+    /// </summary>
     Errored,
 
     /// <summary>Threw <see cref="JobSnoozeException"/>.</summary>
@@ -150,6 +157,12 @@ public enum WorkOutcome
 /// <param name="SnoozeDuration">The snooze duration, if snoozed.</param>
 public sealed record WorkResult(WorkOutcome Outcome, Exception? Exception, TimeSpan? SnoozeDuration)
 {
+    /// <summary>
+    /// The delay the worker chose with <see cref="JobRetryException"/>, which Oxbow would use instead of the retry
+    /// policy if attempts remain.
+    /// </summary>
+    public TimeSpan? RetryDelay { get; init; }
+
     /// <summary>The progress the worker last reported, if any. Heartbeats are ignored.</summary>
     public JobProgress? Progress { get; init; }
 

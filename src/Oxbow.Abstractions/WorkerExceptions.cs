@@ -16,6 +16,38 @@ public sealed class JobSnoozeException : Exception
     public TimeSpan Duration { get; }
 }
 
+/// <summary>
+/// Thrown by a worker to fail the attempt and retry after a delay it learned while working, such as a
+/// <c>Retry-After</c>. The attempt counts toward <see cref="JobRow.MaxAttempts"/> and the error is recorded; the delay
+/// replaces the worker's <c>GetNextRetry</c> and the retry policy for this attempt only.
+/// </summary>
+public sealed class JobRetryException : Exception
+{
+    /// <summary>Fails the attempt and retries after <paramref name="delay"/>.</summary>
+    /// <param name="delay">How long to wait before the next attempt; zero retries now.</param>
+    /// <param name="message">The error, recorded in the job's errors.</param>
+    public JobRetryException(TimeSpan delay, string message)
+        : base(message)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);
+        Delay = delay;
+    }
+
+    /// <summary>Fails the attempt and retries after <paramref name="delay"/>, recording the error that caused it.</summary>
+    /// <param name="delay">How long to wait before the next attempt; zero retries now.</param>
+    /// <param name="message">The error, recorded in the job's errors.</param>
+    /// <param name="innerException">The error that caused the retry. Its type and stack trace are recorded.</param>
+    public JobRetryException(TimeSpan delay, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(delay, TimeSpan.Zero);
+        Delay = delay;
+    }
+
+    /// <summary>How long to wait before the next attempt.</summary>
+    public TimeSpan Delay { get; }
+}
+
 /// <summary>Thrown by a worker to cancel its job permanently. The error is recorded and the job isn't retried.</summary>
 public sealed class JobCancelException : Exception
 {

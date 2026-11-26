@@ -119,7 +119,7 @@ internal sealed class JobExecutor(
             workToken.IsCancellationRequested,
             running.RemoteCancelToken.IsCancellationRequested,
             timeoutSource?.IsCancellationRequested == true);
-        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation).ConfigureAwait(false);
+        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation, activity).ConfigureAwait(false);
         timeoutSource?.Dispose();
 
         tags.Add("outcome", outcome);
@@ -140,7 +140,8 @@ internal sealed class JobExecutor(
         DateTimeOffset start,
         DateTimeOffset now,
         TimeSpan timeout,
-        CancellationSources cancellation)
+        CancellationSources cancellation,
+        Activity? activity)
     {
         var row = running.Row;
         if (error is null)
@@ -179,11 +180,13 @@ internal sealed class JobExecutor(
         {
             OperationCanceledException when cancellation.TimedOut => $"TimeoutException: Job timed out after {timeout}.",
             OperationCanceledException when cancellation.Remote => "JobCancelledException: Job was cancelled remotely.",
+            JobRetryException { InnerException: { } cause } => $"{cause.GetType().Name}: {error.Message}",
             _ => $"{error.GetType().Name}: {error.Message}",
         };
         Log.JobFailed(logger, row.Id, row.Kind, row.Attempt, message);
+        var trace = error is JobRetryException { InnerException: { } inner } ? inner.StackTrace : error.StackTrace;
         var attemptError = JsonSerializer.Serialize(
-            new AttemptError(start, row.Attempt, message, error.StackTrace),
+            new AttemptError(start, row.Attempt, message, trace),
             OxbowJsonContext.Default.AttemptError);
 
         if (error is JobCancelException)
@@ -200,7 +203,9 @@ internal sealed class JobExecutor(
             return "discarded";
         }
 
-        var nextRetry = unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
+        var nextRetry = error is JobRetryException retry
+            ? now + retry.Delay
+            : unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
         if (nextRetry < now)
         {
             Log.RetryInPast(logger, nextRetry, row.Id);
@@ -214,7 +219,13 @@ internal sealed class JobExecutor(
         }).ConfigureAwait(false);
 
         // A cancel request turns the retry into a cancellation when the outcome is written.
-        return cancellation.Remote ? "cancelled" : "errored";
+        if (cancellation.Remote)
+        {
+            return "cancelled";
+        }
+
+        activity?.SetTag("oxbow.job.retry_delay", (nextRetry - now).TotalSeconds);
+        return "errored";
     }
 
     /// <summary>

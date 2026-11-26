@@ -105,7 +105,8 @@ public sealed class OutputAndDiscardTests(PostgresFixture database)
                 .AddWorker<SelfCancelArgs, SelfCancelWorker>()
                 .AddWorker<BlockArgs, BlockWorker>()
                 .AddWorker<RecordArgs, RecordWorker>()
-                .AddWorker<UniqueArgs, UniqueWorker>();
+                .AddWorker<UniqueArgs, UniqueWorker>()
+                .AddWorker<RetryAfterArgs, RetryAfterWorker>();
             if (handlers is null)
             {
                 b.AddDiscardHandler<RecordingDiscardHandler>();
@@ -170,6 +171,21 @@ public sealed class OutputAndDiscardTests(PostgresFixture database)
         Assert.Equal(JobDiscardReason.AttemptsExhausted, call.Reason);
         Assert.IsType<InvalidOperationException>(call.Exception);
         Assert.Equal(JobState.Discarded, call.Job.State);
+        Assert.Equal(2, call.Job.Errors.Count);
+    }
+
+    [Fact]
+    public async Task The_handler_is_called_once_when_worker_chosen_retries_run_out()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        var recorder = new DiscardRecorder();
+        await using var app = await StartAsync(database, prefix, recorder);
+
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(0), new InsertOptions { MaxAttempts = 2 });
+        var call = await recorder.WaitForAsync(result.Job.Id);
+
+        Assert.Equal(JobDiscardReason.AttemptsExhausted, call.Reason);
+        Assert.IsType<JobRetryException>(call.Exception);
         Assert.Equal(2, call.Job.Errors.Count);
     }
 

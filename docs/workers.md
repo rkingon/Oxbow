@@ -34,6 +34,7 @@ services.AddOxbow(...).AddWorker<ResizeImage, ResizeImageWorker>();
 |---|---|
 | returns | `completed` |
 | throws | `retryable` (or `available` if the retry is due soon), or `discarded` after `MaxAttempts` |
+| throws `JobRetryException(delay, message)` | as for any throw, but retried at exactly `now + delay` instead of the retry policy's time; see [retries](retries.md#a-delay-chosen-at-run-time) |
 | throws `JobSnoozeException(delay)` | `scheduled` for `now + delay`; the attempt isn't spent; `metadata.snoozes` is incremented |
 | throws `JobCancelException` | `cancelled`, with the error recorded; never retried |
 

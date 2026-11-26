@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `JobRetryException(delay, message[, innerException])`: a worker fails the attempt and chooses when it's retried, such
+  as from a `Retry-After`. The attempt counts and the error is recorded (with the inner exception's type and stack
+  trace when there is one); the next attempt is at exactly `now + delay`, ahead of `GetNextRetry` and `IRetryPolicy`.
+  `WorkResult.RetryDelay` in `Oxbow.Testing` reports the delay. See [docs/retries.md](docs/retries.md).
+- The `oxbow.work` span has `oxbow.job.retry_delay` when a failed attempt will be retried.
+
 ## [0.2.0-alpha.2] - 2026-11-23
 
 `Oxbow.Abstractions` and ambient transaction enlistment. No schema change.

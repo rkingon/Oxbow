@@ -11,8 +11,8 @@ Domain and application projects reference it to own their jobs, and only the hos
 ## What's in it
 
 - Job definition: `IJobArgs`, `[JobKind]`, `[UniqueKey]`, `[PartitionKey]`, `[SequenceKey]`, `[EncryptArgs]`
-- Workers: `IWorker<TArgs>`, `Job<TArgs>`, `IJobRuntime`, `JobSnoozeException`, `JobCancelException`,
-  `IJobWorkMiddleware`, `JobContext`, `IJobDiscardHandler`
+- Workers: `IWorker<TArgs>`, `Job<TArgs>`, `IJobRuntime`, `JobRetryException`, `JobSnoozeException`,
+  `JobCancelException`, `IJobWorkMiddleware`, `JobContext`, `IJobDiscardHandler`
 - Inserting: `IOxbowClient`, `InsertOptions`, `UniqueOptions`, `InsertManyItem`, `InsertResult`, `BatchOptions`
 - Reading: `JobRow`, `JobState`, `JobFilter`, `JobListQuery`, `Batch`
 

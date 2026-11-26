@@ -1,1 +1,3 @@
 #nullable enable
+Oxbow.Testing.WorkResult.RetryDelay.get -> System.TimeSpan?
+Oxbow.Testing.WorkResult.RetryDelay.init -> void
