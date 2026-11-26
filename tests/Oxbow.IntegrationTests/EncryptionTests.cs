@@ -182,7 +182,7 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
         var prefix = await database.CreateSchemaAsync();
         await using var app = await StartAsync(prefix, o => o.EncryptAllArgs = true);
 
-        var result = await app.Client.InsertAsync(new RetryAfterArgs(0), new InsertOptions { MaxAttempts = 2 });
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.Zero), new InsertOptions { MaxAttempts = 2 });
 
         var job = await app.WaitForStateAsync(result.Job.Id, JobState.Discarded);
         Assert.Equal(2, job.Attempt);

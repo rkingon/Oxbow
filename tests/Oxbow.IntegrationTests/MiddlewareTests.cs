@@ -32,7 +32,7 @@ public sealed class MiddlewareTests(PostgresFixture database)
         var result = await app.Client.InsertAsync(new FailArgs("vendor down"));
 
         var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
-        Assert.Equal("InvalidOperationException: retry in an hour", Assert.Single(job.Errors).Error);
+        Assert.Equal("InvalidOperationException: retry in an hour (vendor down)", Assert.Single(job.Errors).Error);
         Assert.InRange(job.ScheduledAt, before + RetryLater.Delay, DateTimeOffset.UtcNow + RetryLater.Delay);
     }
 

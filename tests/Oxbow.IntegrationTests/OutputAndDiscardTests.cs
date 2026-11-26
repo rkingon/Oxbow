@@ -181,7 +181,7 @@ public sealed class OutputAndDiscardTests(PostgresFixture database)
         var recorder = new DiscardRecorder();
         await using var app = await StartAsync(database, prefix, recorder);
 
-        var result = await app.Client.InsertAsync(new RetryAfterArgs(0), new InsertOptions { MaxAttempts = 2 });
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.Zero), new InsertOptions { MaxAttempts = 2 });
         var call = await recorder.WaitForAsync(result.Job.Id);
 
         Assert.Equal(JobDiscardReason.AttemptsExhausted, call.Reason);

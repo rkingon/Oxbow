@@ -34,11 +34,13 @@ catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyReq
 
 - It's a failed attempt: it counts toward `MaxAttempts`, and past the limit the job is `discarded` and
   [discard handlers](discard-handlers.md) run with `AttemptsExhausted`.
-- The error recorded is `{Type}: {message}` with the stack trace, where the type and trace are the inner exception's
-  when there is one (`HttpRequestException: payments.rate_limited`), and `JobRetryException`'s otherwise.
+- The error recorded is `JobRetryException: {message}` with its stack trace. With an inner exception it's
+  `{InnerType}: {message} ({inner message})` with the inner exception's stack trace, e.g.
+  `HttpRequestException: payments.rate_limited (Response status code does not indicate success: 429 (Too Many Requests).)`.
 - The next attempt is at exactly `now + delay`, with no jitter. `GetNextRetry` and `IRetryPolicy` aren't consulted for
   this attempt; later failures go back to them.
-- A zero delay retries now; a negative one throws `ArgumentOutOfRangeException` when the exception is constructed.
+- A zero delay retries now; a negative one throws `ArgumentOutOfRangeException` when the exception is constructed. A
+  delay past the year 9999 waits until 9999-01-01, as a snooze does.
 
 Snoozing (`JobSnoozeException`) is the alternative when waiting isn't a failure: it doesn't spend an attempt or record
 an error.

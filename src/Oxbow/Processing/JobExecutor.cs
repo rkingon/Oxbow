@@ -53,6 +53,12 @@ internal sealed class JobExecutor(
     TimeProvider timeProvider,
     ILogger logger)
 {
+    /// <summary>
+    /// The latest time a retry or snooze is scheduled for. <see cref="DateTimeOffset.MaxValue"/> would be written as
+    /// Postgres <c>infinity</c>; this one round-trips through <c>timestamptz</c> unchanged.
+    /// </summary>
+    internal static readonly DateTimeOffset MaxScheduledAt = new(9999, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     private readonly DefaultRetryPolicy _fallbackRetryPolicy = new(timeProvider);
 
     public async Task ExecuteAsync(RunningJob running, CancellationToken workToken)
@@ -159,7 +165,7 @@ internal sealed class JobExecutor(
             await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
-                ScheduledAt = now + snooze.Duration,
+                ScheduledAt = After(now, snooze.Duration),
                 MetadataUpdates = new JsonObject { ["snoozes"] = snoozes }.ToJsonString(),
             }).ConfigureAwait(false);
             return "snoozed";
@@ -180,7 +186,7 @@ internal sealed class JobExecutor(
         {
             OperationCanceledException when cancellation.TimedOut => $"TimeoutException: Job timed out after {timeout}.",
             OperationCanceledException when cancellation.Remote => "JobCancelledException: Job was cancelled remotely.",
-            JobRetryException { InnerException: { } cause } => $"{cause.GetType().Name}: {error.Message}",
+            JobRetryException { InnerException: { } cause } => $"{cause.GetType().Name}: {error.Message} ({cause.Message})",
             _ => $"{error.GetType().Name}: {error.Message}",
         };
         Log.JobFailed(logger, row.Id, row.Kind, row.Attempt, message);
@@ -204,7 +210,7 @@ internal sealed class JobExecutor(
         }
 
         var nextRetry = error is JobRetryException retry
-            ? now + retry.Delay
+            ? After(now, retry.Delay)
             : unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
         if (nextRetry < now)
         {
@@ -240,6 +246,9 @@ internal sealed class JobExecutor(
             discardHooks.Observe(written, update.Id, update.State, error);
         }
     }
+
+    private static DateTimeOffset After(DateTimeOffset now, TimeSpan delay) =>
+        delay >= MaxScheduledAt - now ? MaxScheduledAt : now + delay;
 
     /// <summary>Within one scheduler interval, a job goes straight to available instead of waiting for the scheduler.</summary>
     private JobState StateFor(TimeSpan delay, JobState otherwise) =>

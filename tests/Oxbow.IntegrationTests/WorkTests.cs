@@ -1,3 +1,5 @@
+using Oxbow.Processing;
+
 namespace Oxbow.IntegrationTests;
 
 public sealed class WorkTests(PostgresFixture database)
@@ -60,7 +62,7 @@ public sealed class WorkTests(PostgresFixture database)
         await using var app = await StartAsync();
         var delay = TimeSpan.FromMinutes(30);
         var before = DateTimeOffset.UtcNow;
-        var result = await app.Client.InsertAsync(new RetryAfterArgs((int)delay.TotalMilliseconds));
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(delay));
 
         var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
         var after = DateTimeOffset.UtcNow;
@@ -93,7 +95,7 @@ public sealed class WorkTests(PostgresFixture database)
         using (var test = source.StartActivity("test")!)
         {
             traceId = test.TraceId;
-            result = await app.Client.InsertAsync(new RetryAfterArgs((int)TimeSpan.FromMinutes(30).TotalMilliseconds));
+            result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.FromMinutes(30)));
         }
 
         await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
@@ -108,11 +110,11 @@ public sealed class WorkTests(PostgresFixture database)
     public async Task A_worker_chosen_retry_records_the_cause_type_and_trace()
     {
         await using var app = await StartAsync();
-        var result = await app.Client.InsertAsync(new RetryAfterArgs((int)TimeSpan.FromMinutes(30).TotalMilliseconds, WithCause: true));
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.FromMinutes(30), WithCause: true));
 
         var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
         var error = Assert.Single(job.Errors);
-        Assert.Equal("HttpRequestException: vendor.rate_limited", error.Error);
+        Assert.Equal("HttpRequestException: vendor.rate_limited (429 Too Many Requests)", error.Error);
         Assert.Contains("CallVendor", error.Trace, StringComparison.Ordinal);
     }
 
@@ -120,13 +122,35 @@ public sealed class WorkTests(PostgresFixture database)
     public async Task A_worker_chosen_retry_spends_attempts_and_is_discarded_when_they_run_out()
     {
         await using var app = await StartAsync();
-        var result = await app.Client.InsertAsync(new RetryAfterArgs(0), new InsertOptions { MaxAttempts = 3 });
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.Zero), new InsertOptions { MaxAttempts = 3 });
 
         var job = await app.WaitForStateAsync(result.Job.Id, JobState.Discarded);
         Assert.Equal(3, job.Attempt);
         Assert.Equal([1, 2, 3], job.Errors.Select(e => e.Attempt));
         Assert.All(job.Errors, e => Assert.Equal("JobRetryException: vendor.rate_limited", e.Error));
         Assert.Equal(3, app.Recorder.RunCounts[result.Job.Id]);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_beyond_the_calendar_waits_until_the_latest_schedulable_time()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.MaxValue));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+        Assert.Equal(JobExecutor.MaxScheduledAt, job.ScheduledAt);
+        Assert.Single(job.Errors);
+    }
+
+    [Fact]
+    public async Task A_snooze_beyond_the_calendar_waits_until_the_latest_schedulable_time()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new SnoozeArgs(1, TimeSpan.MaxValue));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Scheduled);
+        Assert.Equal(JobExecutor.MaxScheduledAt, job.ScheduledAt);
+        Assert.Equal(0, job.Attempt);
     }
 
     [Fact]

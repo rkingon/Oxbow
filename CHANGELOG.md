@@ -10,10 +10,16 @@ Worker-chosen retry delays. No schema change.
 ### Added
 
 - `JobRetryException(delay, message[, innerException])`: a worker fails the attempt and chooses when it's retried, such
-  as from a `Retry-After`. The attempt counts and the error is recorded (with the inner exception's type and stack
-  trace when there is one); the next attempt is at exactly `now + delay`, ahead of `GetNextRetry` and `IRetryPolicy`.
+  as from a `Retry-After`. The attempt counts and the error is recorded, as `{InnerType}: {message} ({inner message})`
+  with the inner exception's stack trace when there is one; the next attempt is at exactly `now + delay`, ahead of
+  `GetNextRetry` and `IRetryPolicy`.
   `WorkResult.RetryDelay` in `Oxbow.Testing` reports the delay. See [docs/retries.md](docs/retries.md).
 - The `oxbow.work` span has `oxbow.job.retry_delay` when a failed attempt will be retried.
+
+### Fixed
+
+- A snooze too long to add to the current time (such as `TimeSpan.MaxValue`) left the job `running` until the rescuer
+  retried it. It now waits until 9999-01-01.
 
 ## [0.2.0-alpha.2] - 2026-11-23
 

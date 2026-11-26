@@ -58,7 +58,7 @@ public sealed class SlowWorker(JobRecorder recorder) : IWorker<SlowArgs>
 }
 
 [JobKind("snooze")]
-public sealed record SnoozeArgs(int Times) : IJobArgs;
+public sealed record SnoozeArgs(int Times, TimeSpan? Duration = null) : IJobArgs;
 
 public sealed class SnoozeWorker(JobRecorder recorder) : IWorker<SnoozeArgs>
 {
@@ -68,7 +68,7 @@ public sealed class SnoozeWorker(JobRecorder recorder) : IWorker<SnoozeArgs>
         var snoozes = job.Metadata.TryGetProperty("snoozes", out var s) ? s.GetInt32() : 0;
         if (snoozes < job.Args.Times)
         {
-            throw new JobSnoozeException(TimeSpan.FromMilliseconds(100));
+            throw new JobSnoozeException(job.Args.Duration ?? TimeSpan.FromMilliseconds(100));
         }
 
         return Task.CompletedTask;
@@ -76,14 +76,14 @@ public sealed class SnoozeWorker(JobRecorder recorder) : IWorker<SnoozeArgs>
 }
 
 [JobKind("retry_after")]
-public sealed record RetryAfterArgs(int DelayMilliseconds, bool WithCause = false) : IJobArgs;
+public sealed record RetryAfterArgs(TimeSpan Delay, bool WithCause = false) : IJobArgs;
 
 public sealed class RetryAfterWorker(JobRecorder recorder) : IWorker<RetryAfterArgs>
 {
     public Task WorkAsync(Job<RetryAfterArgs> job, CancellationToken cancellationToken)
     {
         recorder.Started(job.Id);
-        var delay = TimeSpan.FromMilliseconds(job.Args.DelayMilliseconds);
+        var delay = job.Args.Delay;
         if (!job.Args.WithCause)
         {
             throw new JobRetryException(delay, "vendor.rate_limited");
