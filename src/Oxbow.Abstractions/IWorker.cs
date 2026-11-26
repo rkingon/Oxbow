@@ -6,8 +6,9 @@ public interface IWorker<TArgs>
     where TArgs : IJobArgs
 {
     /// <summary>
-    /// Works the job. Returning completes it; throwing fails the attempt. Throw <see cref="JobSnoozeException"/> or
-    /// <see cref="JobCancelException"/> to snooze or cancel it.
+    /// Works the job. Returning completes it; throwing fails the attempt. Throw <see cref="JobRetryException"/> to fail
+    /// it with a retry delay of your own, or <see cref="JobSnoozeException"/> or <see cref="JobCancelException"/> to
+    /// snooze or cancel it.
     /// </summary>
     /// <param name="job">The job.</param>
     /// <param name="cancellationToken">Signalled on timeout, on a cancel request, and at shutdown.</param>
@@ -19,7 +20,10 @@ public interface IWorker<TArgs>
     /// <returns>The timeout, <see cref="Timeout.InfiniteTimeSpan"/> for none, or <see langword="null"/> for the default.</returns>
     TimeSpan? GetTimeout(Job<TArgs> job) => null;
 
-    /// <summary>When to retry after a failed attempt, overriding the retry policy.</summary>
+    /// <summary>
+    /// When to retry after a failed attempt, overriding the retry policy. Not called when the attempt threw
+    /// <see cref="JobRetryException"/>.
+    /// </summary>
     /// <param name="job">The job.</param>
     /// <returns>The retry time, or <see langword="null"/> for the retry policy's.</returns>
     DateTimeOffset? GetNextRetry(Job<TArgs> job) => null;

@@ -58,7 +58,7 @@ public sealed class SlowWorker(JobRecorder recorder) : IWorker<SlowArgs>
 }
 
 [JobKind("snooze")]
-public sealed record SnoozeArgs(int Times) : IJobArgs;
+public sealed record SnoozeArgs(int Times, TimeSpan? Duration = null) : IJobArgs;
 
 public sealed class SnoozeWorker(JobRecorder recorder) : IWorker<SnoozeArgs>
 {
@@ -68,11 +68,43 @@ public sealed class SnoozeWorker(JobRecorder recorder) : IWorker<SnoozeArgs>
         var snoozes = job.Metadata.TryGetProperty("snoozes", out var s) ? s.GetInt32() : 0;
         if (snoozes < job.Args.Times)
         {
-            throw new JobSnoozeException(TimeSpan.FromMilliseconds(100));
+            throw new JobSnoozeException(job.Args.Duration ?? TimeSpan.FromMilliseconds(100));
         }
 
         return Task.CompletedTask;
     }
+}
+
+[JobKind("retry_after")]
+public sealed record RetryAfterArgs(TimeSpan Delay, bool WithCause = false) : IJobArgs;
+
+public sealed class RetryAfterWorker(JobRecorder recorder) : IWorker<RetryAfterArgs>
+{
+    public Task WorkAsync(Job<RetryAfterArgs> job, CancellationToken cancellationToken)
+    {
+        recorder.Started(job.Id);
+        var delay = job.Args.Delay;
+        if (!job.Args.WithCause)
+        {
+            throw new JobRetryException(delay, "vendor.rate_limited");
+        }
+
+        try
+        {
+            CallVendor();
+            return Task.CompletedTask;
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new JobRetryException(delay, "vendor.rate_limited", ex);
+        }
+    }
+
+    // Far enough out that a test would time out if this won over the worker's delay.
+    public DateTimeOffset? GetNextRetry(Job<RetryAfterArgs> job) => DateTimeOffset.UtcNow.AddDays(10);
+
+    private static void CallVendor() =>
+        throw new HttpRequestException("429 Too Many Requests", null, System.Net.HttpStatusCode.TooManyRequests);
 }
 
 [JobKind("self_cancel")]

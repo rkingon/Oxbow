@@ -53,6 +53,12 @@ internal sealed class JobExecutor(
     TimeProvider timeProvider,
     ILogger logger)
 {
+    /// <summary>
+    /// The latest time a retry or snooze is scheduled for. <see cref="DateTimeOffset.MaxValue"/> would be written as
+    /// Postgres <c>infinity</c>; this one round-trips through <c>timestamptz</c> unchanged.
+    /// </summary>
+    internal static readonly DateTimeOffset MaxScheduledAt = new(9999, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     private readonly DefaultRetryPolicy _fallbackRetryPolicy = new(timeProvider);
 
     public async Task ExecuteAsync(RunningJob running, CancellationToken workToken)
@@ -119,7 +125,7 @@ internal sealed class JobExecutor(
             workToken.IsCancellationRequested,
             running.RemoteCancelToken.IsCancellationRequested,
             timeoutSource?.IsCancellationRequested == true);
-        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation).ConfigureAwait(false);
+        var outcome = await ReportAsync(running, unit, error, output, start, now, timeout, cancellation, activity).ConfigureAwait(false);
         timeoutSource?.Dispose();
 
         tags.Add("outcome", outcome);
@@ -140,7 +146,8 @@ internal sealed class JobExecutor(
         DateTimeOffset start,
         DateTimeOffset now,
         TimeSpan timeout,
-        CancellationSources cancellation)
+        CancellationSources cancellation,
+        Activity? activity)
     {
         var row = running.Row;
         if (error is null)
@@ -158,7 +165,7 @@ internal sealed class JobExecutor(
             await EnqueueAsync(running, error, new SetStateParams(row.Id, StateFor(snooze.Duration, JobState.Scheduled))
             {
                 Attempt = Math.Max(row.Attempt - 1, 0),
-                ScheduledAt = now + snooze.Duration,
+                ScheduledAt = After(now, snooze.Duration),
                 MetadataUpdates = new JsonObject { ["snoozes"] = snoozes }.ToJsonString(),
             }).ConfigureAwait(false);
             return "snoozed";
@@ -179,11 +186,13 @@ internal sealed class JobExecutor(
         {
             OperationCanceledException when cancellation.TimedOut => $"TimeoutException: Job timed out after {timeout}.",
             OperationCanceledException when cancellation.Remote => "JobCancelledException: Job was cancelled remotely.",
+            JobRetryException { InnerException: { } cause } => $"{cause.GetType().Name}: {error.Message} ({cause.Message})",
             _ => $"{error.GetType().Name}: {error.Message}",
         };
         Log.JobFailed(logger, row.Id, row.Kind, row.Attempt, message);
+        var trace = error is JobRetryException { InnerException: { } inner } ? inner.StackTrace : error.StackTrace;
         var attemptError = JsonSerializer.Serialize(
-            new AttemptError(start, row.Attempt, message, error.StackTrace),
+            new AttemptError(start, row.Attempt, message, trace),
             OxbowJsonContext.Default.AttemptError);
 
         if (error is JobCancelException)
@@ -200,7 +209,9 @@ internal sealed class JobExecutor(
             return "discarded";
         }
 
-        var nextRetry = unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
+        var nextRetry = error is JobRetryException retry
+            ? After(now, retry.Delay)
+            : unit?.GetNextRetry() ?? retryPolicy.NextRetry(row);
         if (nextRetry < now)
         {
             Log.RetryInPast(logger, nextRetry, row.Id);
@@ -214,7 +225,13 @@ internal sealed class JobExecutor(
         }).ConfigureAwait(false);
 
         // A cancel request turns the retry into a cancellation when the outcome is written.
-        return cancellation.Remote ? "cancelled" : "errored";
+        if (cancellation.Remote)
+        {
+            return "cancelled";
+        }
+
+        activity?.SetTag("oxbow.job.retry_delay", (nextRetry - now).TotalSeconds);
+        return "errored";
     }
 
     /// <summary>
@@ -229,6 +246,9 @@ internal sealed class JobExecutor(
             discardHooks.Observe(written, update.Id, update.State, error);
         }
     }
+
+    private static DateTimeOffset After(DateTimeOffset now, TimeSpan delay) =>
+        delay >= MaxScheduledAt - now ? MaxScheduledAt : now + delay;
 
     /// <summary>Within one scheduler interval, a job goes straight to available instead of waiting for the scheduler.</summary>
     private JobState StateFor(TimeSpan delay, JobState otherwise) =>

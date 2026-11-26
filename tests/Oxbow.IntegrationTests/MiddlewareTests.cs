@@ -20,6 +20,39 @@ public sealed class MiddlewareTests(PostgresFixture database)
         Assert.Contains("tenant:acme", app.Recorder.Events);
     }
 
+    [Fact]
+    public async Task Work_middleware_can_turn_a_failure_into_a_worker_chosen_retry()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions(), b => b
+            .AddWorker<FailArgs, FailWorker>()
+            .AddWorkMiddleware<RetryLater>());
+
+        var before = DateTimeOffset.UtcNow;
+        var result = await app.Client.InsertAsync(new FailArgs("vendor down"));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+        Assert.Equal("InvalidOperationException: retry in an hour (vendor down)", Assert.Single(job.Errors).Error);
+        Assert.InRange(job.ScheduledAt, before + RetryLater.Delay, DateTimeOffset.UtcNow + RetryLater.Delay);
+    }
+
+    private sealed class RetryLater : IJobWorkMiddleware
+    {
+        public static readonly TimeSpan Delay = TimeSpan.FromHours(1);
+
+        public async Task InvokeAsync(JobContext context, JobWorkDelegate next)
+        {
+            try
+            {
+                await next(context);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new JobRetryException(Delay, "retry in an hour", ex);
+            }
+        }
+    }
+
     private sealed class StampTenant : IJobInsertMiddleware
     {
         public Task<IReadOnlyList<InsertResult>> InvokeAsync(JobInsertContext context, JobInsertDelegate next)

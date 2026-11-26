@@ -179,7 +179,8 @@ public sealed class SendEmailWorker(IEmailSender sender) : IWorker<SendEmail>
   SHA-256. Keys are ordinally sorted, and the walk recurses into nested objects the way River's struct-tag walk does.
   When an encrypted kind is unique by args, the protector's HMAC replaces SHA-256 ([encryption](encryption.md)).
 - **Control flow from a worker** uses exceptions, which is the .NET equivalent of River's sentinel errors:
-  `throw new JobSnoozeException(TimeSpan)` and `throw new JobCancelException(reason)`.
+  `throw new JobSnoozeException(TimeSpan)`, `throw new JobCancelException(reason)`, and
+  `throw new JobRetryException(TimeSpan, message)` to fail the attempt with a delay that replaces the retry policy.
 
 ### Registration
 
@@ -228,6 +229,7 @@ commit always goes through the plain client.
 insert ──► available ──fetch──► running ──ok──────────────► completed
    │  (scheduled_at > now)        │  ├─error, attempts left ► retryable ──scheduler──► available
    └──► scheduled ──scheduler──►  │  ├─error, attempts gone ► discarded
+                                  │  ├─JobRetryException ───► retryable / discarded, as an error, at now + its delay
                                   │  ├─JobCancelException ──► cancelled
                                   │  ├─JobSnoozeException ──► scheduled (attempt - 1, metadata.snoozes + 1)
                                   │  ├─soft shutdown ───────► available (attempt - 1)
@@ -245,7 +247,7 @@ attempt: `{ at, attempt, error: "{ExceptionType}: {Message}", trace }`.
 **Retry policy:** `attempt^4` seconds with ±10% jitter, where `attempt = errors.Count + 1`. That's River's default, and
 it sums to roughly three weeks over 25 attempts. A worker's `GetNextRetry` returns `DateTimeOffset?` (null falls through),
 and the global `IRetryPolicy` can be replaced in DI. A result in the past falls back to the default policy, with a
-warning, as in River.
+warning, as in River. A `JobRetryException` sets the time itself (`now + delay`, no jitter) and neither is called.
 
 **Timeouts:** the client default is 1 minute (`OxbowOptions.JobTimeout`). A worker's `GetTimeout` can override it;
 `Timeout.InfiniteTimeSpan` disables it. The timeout is enforced with `CancelAfter` on the job's token and recorded as an

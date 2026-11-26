@@ -1,3 +1,5 @@
+using Oxbow.Processing;
+
 namespace Oxbow.IntegrationTests;
 
 public sealed class WorkTests(PostgresFixture database)
@@ -7,7 +9,8 @@ public sealed class WorkTests(PostgresFixture database)
         .AddWorker<FailArgs, FailWorker>()
         .AddWorker<SnoozeArgs, SnoozeWorker>()
         .AddWorker<SelfCancelArgs, SelfCancelWorker>()
-        .AddWorker<SlowArgs, SlowWorker>();
+        .AddWorker<SlowArgs, SlowWorker>()
+        .AddWorker<RetryAfterArgs, RetryAfterWorker>();
 
     private async Task<TestApp> StartAsync(Action<OxbowOptions>? configure = null) =>
         await TestApp.StartAsync(database, await database.CreateSchemaAsync(), o =>
@@ -51,6 +54,103 @@ public sealed class WorkTests(PostgresFixture database)
         Assert.Equal(1, job.Attempt);
         Assert.Equal(3, job.Metadata.GetProperty("snoozes").GetInt32());
         Assert.Empty(job.Errors);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_records_the_error_and_waits_exactly_its_delay_over_GetNextRetry()
+    {
+        await using var app = await StartAsync();
+        var delay = TimeSpan.FromMinutes(30);
+        var before = DateTimeOffset.UtcNow;
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(delay));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+        var after = DateTimeOffset.UtcNow;
+        Assert.Equal(1, job.Attempt);
+        var error = Assert.Single(job.Errors);
+        Assert.Equal(1, error.Attempt);
+        Assert.Equal("JobRetryException: vendor.rate_limited", error.Error);
+        Assert.Contains(nameof(RetryAfterWorker.WorkAsync), error.Trace, StringComparison.Ordinal);
+        Assert.InRange(job.ScheduledAt, before + delay, after + delay);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_is_traced_as_an_error_with_its_delay()
+    {
+        var spans = new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Oxbow",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = spans.Enqueue,
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        await using var app = await StartAsync();
+
+        // Job IDs repeat across the tests' schemas, so the span is found by the trace its insert started.
+        using var source = new System.Diagnostics.ActivitySource("Oxbow");
+        InsertResult result;
+        System.Diagnostics.ActivityTraceId traceId;
+        using (var test = source.StartActivity("test")!)
+        {
+            traceId = test.TraceId;
+            result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.FromMinutes(30)));
+        }
+
+        await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+
+        var span = Assert.Single(spans, s => s.OperationName == "oxbow.work" && s.Links.Any(l => l.Context.TraceId == traceId));
+        Assert.Equal("errored", span.GetTagItem("oxbow.job.outcome"));
+        Assert.Equal(System.Diagnostics.ActivityStatusCode.Error, span.Status);
+        Assert.Equal(TimeSpan.FromMinutes(30).TotalSeconds, (double)span.GetTagItem("oxbow.job.retry_delay")!);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_records_the_cause_type_and_trace()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.FromMinutes(30), WithCause: true));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+        var error = Assert.Single(job.Errors);
+        Assert.Equal("HttpRequestException: vendor.rate_limited (429 Too Many Requests)", error.Error);
+        Assert.Contains("CallVendor", error.Trace, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_spends_attempts_and_is_discarded_when_they_run_out()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.Zero), new InsertOptions { MaxAttempts = 3 });
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Discarded);
+        Assert.Equal(3, job.Attempt);
+        Assert.Equal([1, 2, 3], job.Errors.Select(e => e.Attempt));
+        Assert.All(job.Errors, e => Assert.Equal("JobRetryException: vendor.rate_limited", e.Error));
+        Assert.Equal(3, app.Recorder.RunCounts[result.Job.Id]);
+    }
+
+    [Fact]
+    public async Task A_worker_chosen_retry_beyond_the_calendar_waits_until_the_latest_schedulable_time()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.MaxValue));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Retryable);
+        Assert.Equal(JobExecutor.MaxScheduledAt, job.ScheduledAt);
+        Assert.Single(job.Errors);
+    }
+
+    [Fact]
+    public async Task A_snooze_beyond_the_calendar_waits_until_the_latest_schedulable_time()
+    {
+        await using var app = await StartAsync();
+        var result = await app.Client.InsertAsync(new SnoozeArgs(1, TimeSpan.MaxValue));
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Scheduled);
+        Assert.Equal(JobExecutor.MaxScheduledAt, job.ScheduledAt);
+        Assert.Equal(0, job.Attempt);
     }
 
     [Fact]

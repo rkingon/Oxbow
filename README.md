@@ -7,7 +7,8 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 
 - Transactional enqueue on your `NpgsqlConnection`/`NpgsqlTransaction`
 - Typed jobs and DI-resolved workers, args serialized with System.Text.Json
-- Retries with exponential backoff and an errors history; snooze and self-cancel
+- Retries with exponential backoff and an errors history, or a delay the worker chooses (`Retry-After`); snooze and
+  self-cancel
 - Job output stored with the completion; discard handlers for jobs that are discarded or cancelled
 - Cancel a queued job, or signal a running one on any node through its `CancellationToken`
 - Unique jobs enforced by a unique index: by args, period, queue and state

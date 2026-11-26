@@ -177,6 +177,19 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
     }
 
     [Fact]
+    public async Task A_worker_chosen_retry_on_encrypted_args_is_recorded_and_retried()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await StartAsync(prefix, o => o.EncryptAllArgs = true);
+
+        var result = await app.Client.InsertAsync(new RetryAfterArgs(TimeSpan.Zero), new InsertOptions { MaxAttempts = 2 });
+
+        var job = await app.WaitForStateAsync(result.Job.Id, JobState.Discarded);
+        Assert.Equal(2, job.Attempt);
+        Assert.All(job.Errors, e => Assert.Equal("JobRetryException: vendor.rate_limited", e.Error));
+    }
+
+    [Fact]
     public async Task Args_that_fail_to_decrypt_are_retried_then_discarded()
     {
         var prefix = await database.CreateSchemaAsync();
@@ -296,7 +309,8 @@ public sealed class EncryptionTests(PostgresFixture database) : IDisposable
                 b.Services.AddDataProtection().SetApplicationName("oxbow-tests").PersistKeysToFileSystem(_keys);
                 b.AddArgsEncryption(o => o.UniqueKeySecret = Secret)
                     .AddWorker<SecretArgs, SecretWorker>()
-                    .AddWorker<RecordArgs, RecordWorker>();
+                    .AddWorker<RecordArgs, RecordWorker>()
+                    .AddWorker<RetryAfterArgs, RetryAfterWorker>();
             },
             start: start);
 
