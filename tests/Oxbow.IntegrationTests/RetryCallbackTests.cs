@@ -1,3 +1,7 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Oxbow.Internal;
+using Oxbow.Processing;
+
 namespace Oxbow.IntegrationTests;
 
 public sealed class RetryCallbackTests(PostgresFixture database)
@@ -28,6 +32,50 @@ public sealed class RetryCallbackTests(PostgresFixture database)
         var row = await app.WaitForStateAsync(id, JobState.Retryable);
         Assert.Equal(FixedRetryPolicy.RetryAt, row.ScheduledAt);
         Assert.Contains("rescued", Assert.Single(row.Errors).Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Shutdown_during_scope_disposal_refunds_the_final_cancelled_attempt()
+    {
+        var gate = new DisposalGate();
+        await using var app = await TestApp.StartAsync(database, await database.CreateSchemaAsync(), register: b =>
+        {
+            b.Services.AddSingleton(gate);
+            b.AddWorker<FailArgs, CancellingWorker>();
+        }, start: false);
+        var id = (await app.Client.InsertAsync(new FailArgs("cancel"), new InsertOptions { MaxAttempts = 1 })).Job.Id;
+        await using var claim = app.DataSource.CreateCommand(
+            $"UPDATE public.{app.Prefix}job SET state='running', attempt=1, attempted_at=now() WHERE id=@id");
+        claim.Parameters.AddWithValue("id", id);
+        Assert.Equal(1, await claim.ExecuteNonQueryAsync());
+
+        var services = app.Host.Services;
+        var runtime = services.GetRequiredService<OxbowRuntime>();
+        var scopes = services.GetRequiredService<IServiceScopeFactory>();
+        var completer = new Completer(runtime, NullLogger.Instance);
+        var executor = new JobExecutor(runtime, services.GetRequiredService<WorkerRegistry>(), scopes,
+            services.GetRequiredService<IRetryPolicy>(), completer, new DiscardHooks(runtime, [], scopes, NullLogger.Instance),
+            TimeProvider.System, NullLogger.Instance);
+        using var running = new RunningJob((await app.Client.GetAsync(id))!);
+        using var stop = new CancellationTokenSource();
+        var work = executor.ExecuteAsync(running, stop.Token);
+        try
+        {
+            await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await stop.CancelAsync();
+        }
+        finally
+        {
+            gate.Release.TrySetResult();
+        }
+
+        await work;
+        completer.Complete();
+        await completer.RunAsync();
+        var row = await app.Client.GetAsync(id);
+        Assert.Equal(JobState.Available, row!.State);
+        Assert.Equal(0, row.Attempt);
+        Assert.Empty(row.Errors);
     }
 
     private async Task<TestApp> StartAsync(bool start = true) =>
@@ -63,5 +111,22 @@ public sealed class DisposableRetryWorker : IWorker<FailArgs>, IDisposable
         }
 
         return RetryAt;
+    }
+}
+
+public sealed class DisposalGate
+{
+    public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
+public sealed class CancellingWorker(DisposalGate gate) : IWorker<FailArgs>, IAsyncDisposable
+{
+    public Task WorkAsync(Job<FailArgs> job, CancellationToken cancellationToken) => throw new OperationCanceledException();
+
+    public async ValueTask DisposeAsync()
+    {
+        gate.Entered.TrySetResult();
+        await gate.Release.Task;
     }
 }

@@ -73,7 +73,6 @@ internal sealed class JobExecutor(
         WorkUnit? unit = null;
         Exception? error = null;
         string? output = null;
-        var now = start;
         var timeout = runtime.Options.JobTimeout;
         CancellationTokenSource? timeoutSource = null;
         try
@@ -121,12 +120,17 @@ internal sealed class JobExecutor(
         }
 
         using var ownedTimeout = timeoutSource;
-        (string Name, SetStateParams Update)? outcome = null;
+        (DateTimeOffset At, DateTimeOffset RequestedAt)? workerRetry = null;
         try
         {
-            if (error is not null && unit is not null)
+            if (unit is not null && error is not null and not (JobSnoozeException or JobCancelException or JobRetryException)
+                && row.Attempt < row.MaxAttempts && !(error is OperationCanceledException && workToken.IsCancellationRequested))
             {
-                outcome = Decide(unit);
+                var requestedAt = timeProvider.GetUtcNow();
+                if (unit.GetNextRetry(logger) is { } nextRetry)
+                {
+                    workerRetry = (nextRetry, requestedAt);
+                }
             }
         }
         finally
@@ -142,12 +146,17 @@ internal sealed class JobExecutor(
 #pragma warning restore CA1031
                 {
                     error = ex;
-                    outcome = null;
+                    workerRetry = null;
                 }
             }
         }
 
-        var result = outcome ?? Decide(null);
+        var now = timeProvider.GetUtcNow();
+        var cancellation = new CancellationSources(
+            workToken.IsCancellationRequested,
+            running.RemoteCancelToken.IsCancellationRequested,
+            timeoutSource?.IsCancellationRequested == true);
+        var result = GetOutcome(row, workerRetry, error, output, start, now, timeout, cancellation, activity);
         await EnqueueAsync(running, error, result.Update).ConfigureAwait(false);
         tags.Add("outcome", result.Name);
         OxbowDiagnostics.JobsFinished.Add(1, tags);
@@ -157,21 +166,11 @@ internal sealed class JobExecutor(
         {
             activity?.SetStatus(ActivityStatusCode.Error, error.Message);
         }
-
-        (string, SetStateParams) Decide(WorkUnit? unit)
-        {
-            now = timeProvider.GetUtcNow();
-            var cancellation = new CancellationSources(
-                workToken.IsCancellationRequested,
-                running.RemoteCancelToken.IsCancellationRequested,
-                timeoutSource?.IsCancellationRequested == true);
-            return GetOutcome(row, unit, error, output, start, now, timeout, cancellation, activity);
-        }
     }
 
     private (string Name, SetStateParams Update) GetOutcome(
         JobRow row,
-        WorkUnit? unit,
+        (DateTimeOffset At, DateTimeOffset RequestedAt)? workerRetry,
         Exception? error,
         string? output,
         DateTimeOffset start,
@@ -234,11 +233,16 @@ internal sealed class JobExecutor(
 
         var nextRetry = error is JobRetryException retry
             ? After(now, retry.Delay)
-            : unit?.GetNextRetry(logger) ?? retryPolicy.NextRetry(row);
-        if (nextRetry < now)
+            : workerRetry?.At ?? retryPolicy.NextRetry(row);
+        if (nextRetry < (workerRetry?.RequestedAt ?? now))
         {
             Log.RetryInPast(logger, nextRetry, row.Id);
             nextRetry = _fallbackRetryPolicy.NextRetry(row);
+        }
+        else if (nextRetry < now)
+        {
+            // A valid worker-selected retry may have come due during scope disposal.
+            nextRetry = now;
         }
 
         var update = new SetStateParams(row.Id, attemptedAt, StateFor(nextRetry - now, JobState.Retryable))

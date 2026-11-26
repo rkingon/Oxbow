@@ -301,9 +301,9 @@ max attempts.
 
 **Completer.** Outcomes are queued and written in batches through `JobSetStateIfRunningMany`: the completer flushes
 every 50 ms or at 5,000 rows, makes workers wait when the backlog reaches 20,000, and retries a failed batch three
-times. A job's slot is freed once its outcome is queued; the row stays `running` until the batch is written, so it
-can't be fetched twice. Shutdown drains the queue. A node that dies with queued outcomes leaves those jobs to the
-rescuer.
+times. Queuing an outcome frees the worker slot. If rescue makes the job claimable before the batch is written, the
+completion query ignores the superseded attempt. Shutdown drains the queue. The rescuer recovers running jobs left by
+a node that dies with queued outcomes.
 
 **Discard handlers.** When an `IJobDiscardHandler` is registered, the executor attaches a continuation to the
 completer's write and, if the state written is `discarded` or `cancelled` (including a retry that `cancel_attempted_at`
