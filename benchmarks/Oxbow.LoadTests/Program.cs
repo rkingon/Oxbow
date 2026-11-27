@@ -63,6 +63,10 @@ switch (role)
         }
         break;
     case "produce":
+        if (Environment.GetEnvironmentVariable("OXBOW_LOAD_WARM_PRODUCER") == "1")
+        {
+            await Traffic.WarmAsync(db);
+        }
         var clock = Stopwatch.StartNew();
         var scheduled = TimeSpan.Zero;
         foreach (var segment in args.Skip(1).Chunk(8))
@@ -113,6 +117,31 @@ internal sealed class LoadWorker(NpgsqlDataSource db) : IWorker<LoadArgs>
 
 internal static class Traffic
 {
+    // A fresh producer would otherwise bootstrap Npgsql and open its first connections against its first deadlines.
+    public static async Task WarmAsync(NpgsqlDataSource db)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var opens = Enumerable.Range(0, 8).Select(_ => db.OpenConnectionAsync().AsTask()).ToArray();
+        try
+        {
+            await Task.WhenAll(opens);
+        }
+        catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
+        {
+            // The offers then pay for their own connections and record any failure in their receipts.
+            await Console.Error.WriteLineAsync(exception.ToString());
+        }
+
+        foreach (var open in opens.Where(o => o.IsCompletedSuccessfully))
+        {
+            await open.Result.DisposeAsync();
+        }
+
+        // Stdout carries only receipts.
+        await Console.Error.WriteLineAsync(FormattableString.Invariant(
+            $"warm-up: {opens.Count(o => o.IsCompletedSuccessfully)}/{opens.Length} connections in {Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms"));
+    }
+
     // A missed dispatch deadline remains visible in the offered-to-ack latency.
     // Bound in-flight transactions and record every offer the producer cannot dispatch.
     public static async Task RunAsync(IOxbowClient client, string[] args, Stopwatch timer, TimeSpan scheduled)

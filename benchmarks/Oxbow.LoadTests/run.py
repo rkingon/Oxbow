@@ -80,6 +80,7 @@ class Run:
         settings = self.sql("select version(), current_setting('fsync'), current_setting('synchronous_commit')")
         require(settings.endswith("|on|on"), settings)
         self.report("environment", postgres=settings, runtime=command("docker", "run", "--rm", DOTNET, "dotnet", "--list-runtimes"),
+                    warmProducer=self.options.warm_producer,
                     commit=command("git", "-C", str(HERE), "rev-parse", "HEAD"), artifacts=str(self.folder),
                     docker=command("docker", "info", "--format", "{{.NCPU}} CPU / {{.MemTotal}} bytes"))
 
@@ -94,6 +95,8 @@ class Run:
                "-v", str(HERE / "bin/Release/publish") + ":/app:ro",
                "-e", "OXBOW_LOAD_DB=Host=db;Username=postgres;Password=loadtest;Database=postgres;Maximum Pool Size=64;Timeout=3",
                DOTNET, "dotnet", DLL, role, *map(str, args)]
+        if role == "produce" and self.options.warm_producer:
+            cmd[2:2] = ["-e", "OXBOW_LOAD_WARM_PRODUCER=1"]
         if role != "worker":
             cmd[2:2] = ["--rm"]
         if self.options.scenario == "soak":
@@ -441,6 +444,7 @@ def main():
     parser.add_argument("--hot-queues", nargs="+", choices=["hot", "rate"], default=["hot", "rate"])
     parser.add_argument("--minutes", default=480, type=int, help="Soak duration")
     parser.add_argument("--rate", default=1000, type=int, help="Soak target in jobs/second")
+    parser.add_argument("--warm-producer", action="store_true", help="Open eight pooled connections before each producer starts its clock")
     options = parser.parse_args()
     require(min(options.seconds, options.minutes, options.rate, options.hot_jobs, options.burst_seconds) > 0, "Step duration must be positive")
     run = Run(options)

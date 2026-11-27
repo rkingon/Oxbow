@@ -1,5 +1,7 @@
 # Oxbow load tests
 
+The [eight-hour results and release findings](#schema-v3-release-candidate) cover product revision `3364be0`.
+
 From the repository root, publish the portable Release binary, then run a profile with Python 3 and Docker.
 
 ```sh
@@ -104,7 +106,7 @@ The first merged-package Postgres 16 reproduction passed. Behind 10,000 older jo
 
 Across the three completed 30-minute runs, all 6,396,144 acknowledged jobs completed on the first attempt. The producer skipped 83,856 of 6,480,000 offers, all single inserts, and 15 of 90 one-minute cohorts exceeded the one-second queue-wait target. Each run missed both admission and latency targets. All 30 cohorts in the third run met the original drain deadline.
 
-Job storage reached 194 MiB at minute 5, 382 MiB at minute 17, 512 MiB at minute 27 and 678 MiB at minute 37. It reached 817 MiB at minute 47 and 924 MiB at minute 56. PostgreSQL estimated 360,479 live tuples after 32 autovacuums at minute 37. A subsequent catalog sample measured 195 MiB for the job arguments GIN index, 159 MiB for the metadata GIN index and 87 MiB for the fetch index. From 08:40 to 08:50 UTC the arguments index grew from 249 to 297 MiB and the metadata index grew from 203 to 243 MiB. The table itself stayed at about 209 MiB during that interval. The individual index measurements are saved in `overnight-index-samples.jsonl` in the run directory. The retention and index-growth investigation is in Paseo workspace `wks_e405e763fc4d725b`, agent `40a77458-1a5f-4d10-a0e6-cf19b96950ce`.
+Job storage reached 194 MiB at minute 5, 382 MiB at minute 17, 512 MiB at minute 27 and 678 MiB at minute 37. It reached 817 MiB at minute 47 and 924 MiB at minute 56. PostgreSQL estimated 360,479 live tuples after 32 autovacuums at minute 37. A subsequent catalog sample measured 195 MiB for the job arguments GIN index, 159 MiB for the metadata GIN index and 87 MiB for the fetch index. From 08:40 to 08:50 UTC the arguments index grew from 249 to 297 MiB and the metadata index grew from 203 to 243 MiB. The table itself stayed at about 209 MiB during that interval. The individual index measurements are saved in `overnight-index-samples.jsonl` in the run directory. The [index-growth investigation](../gin-growth/README.md) includes a separate reproduction and metadata-filter measurements.
 
 The investigator reproduced cumulative GIN growth on PostgreSQL 17 with 60,000 retained rows, 20,000 inserts per cycle and an explicit vacuum each cycle. After 1.8 million inserts with distinct JSON values, the arguments GIN held 1,800,005 entries and occupied 128.9 MB. Rebuilding it reduced it to 60,005 entries and 4.7 MB. Reusing 5,000 distinct values kept the control index at 6.2 MB. The metadata GIN reached 107.4 MB with distinct outputs and shrank to 4.4 MB on rebuild. The proposed v3 migration drops both default GIN indexes. The metadata-filter performance tradeoff and migration are documented in merged [PR #16](https://github.com/rkingon/Oxbow/pull/16). These changes are outside the packaged candidate measured here.
 
@@ -142,6 +144,8 @@ All 18 steps drained. Of 11,340,000 offers, 11,240,044 were acknowledged and com
 
 ## Schema v3 release candidate
 
+The [per-minute soak results](results/3364be0-soak.csv) contain reconciled counts for all 480 cohorts, minimum sampled host CPU idle, peak competing Docker CPU, and the last sampled table and index sizes in each minute. A blank size means the sampling interval crossed the minute boundary. The tested build includes the [tenant fairness fix](https://github.com/rkingon/Oxbow/pull/15) and [storage migration](https://github.com/rkingon/Oxbow/pull/16). Both shipped in the [0.2.0-alpha.5 prerelease](https://github.com/rkingon/Oxbow/releases/tag/v0.2.0-alpha.5). The soak predates that release’s long-running job features.
+
 **Eight-hour soak verdict for `3364be0`: failed admission and queue latency.** All 480 one-minute cohorts ran at a scheduled 1,200 offers/s. Of 34,560,000 scheduled offers, 33,975,981 were acknowledged and completed on the first attempt, 564,922 were skipped before dispatch, and 19,097 uncertain submissions were confirmed absent by ID. Every cohort met the 30-second drain deadline. The one-second p99 queue-wait gate failed in 65 cohorts, peaking at 29.630 s. The harness also recorded 63 cohorts with skipped offers and 10 with unacknowledged insert failures. These counts can overlap.
 
 At the final sample the job table occupied 131.08 MiB and indexes occupied 117.06 MiB. At matched volume near 9.1 million completions, table and indexes together occupied 249 MiB on this build and 1,517 MiB on `2c79ae9`. Across the full soak, all 65 latency misses and 564,104 of 564,922 skips occurred in minutes with at least one host CPU sample at or below 10% idle. The 248 other minutes had zero latency misses and 818 skips. All failures count toward qualification on this shared host.
@@ -150,7 +154,7 @@ PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the me
 
 The eight-hour soak at 1,200 offers/s started at 13:45:54 UTC on November 27. The live test database reported schema version 3 and neither of the full JSON GIN indexes was present. The supervisor records table and individual index sizes each minute. The previous build’s last soak was superseded after 7 verified cohorts to prioritize this candidate. Its partial results are retained in `merged-2c79ae9`. Qualification of the two revisions is tracked separately.
 
-The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. The investigator prepared a separate warm-pool control on branch `harness/producer-warmup` at `507d5e3`. It opens eight connections before timing the offers. It has been built and reviewed; its effect on admission has yet to be measured.
+The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. For a separate control, add `--warm-producer` to open eight pooled connections before timing each producer. The qualification runs used the default cold start. The effect of prewarming on admission remains unmeasured.
 
 On the fixed package, the first seven cohorts offered 504,000 jobs and reconciled all 503,577 acknowledgments on the first attempt. The producer skipped 423 single inserts in minute 6, all in scheduled seconds 4 and 5. This differs from the first-second pattern above. Host CPU idle briefly reached 0% in that minute. The missed admission gate stands. All seven cohorts drained within 30 seconds, and the highest cohort p99 queue wait was 241.3 ms.
 
