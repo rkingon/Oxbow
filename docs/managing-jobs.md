@@ -24,12 +24,29 @@ var acme = new JobFilter
 | `States`, `Queues`, `Kinds` | Any of the values. |
 | `BatchId` | Members of a [batch](batches.md). |
 | `PartitionKey` | Jobs with that [partition key](concurrency-limits.md). |
-| `Metadata` | Jobs whose metadata contains the object (`@>`): `{"tenant": "acme"}` matches any job with that key and value, and nested objects match the same way. Not indexed: combine it with `States`, `Queues` or `Kinds` to narrow the scan. |
+| `Metadata` | Jobs whose metadata contains the object (`@>`): `{"tenant": "acme"}` matches any job with that key and value, and nested objects match the same way. Not indexed: combine it with `States`, `Queues` or `Kinds` to narrow the scan, or see [Indexing metadata filters](#indexing-metadata-filters). |
 | `Tags` | Jobs carrying all of the tags. |
 
 Filters combine with AND, and unset ones match everything. `JobListQuery` is a `JobFilter` with paging (`Limit`,
 `Cursor`, `Descending`). Bulk operations reject a `JobListQuery`: they act on every match, not a page, so "delete what I
 see" must not quietly delete everything. Pass a `JobFilter`.
+
+### Indexing metadata filters
+
+Oxbow doesn't index `metadata`. A GIN index keeps an entry for every distinct value it has ever indexed, and the
+output and heartbeat times Oxbow writes there differ per job, so such an index grows with every job inserted rather
+than with the jobs kept. If metadata-only filters on a large table are too slow for you, add one and rebuild it on a
+schedule:
+
+```sql
+CREATE INDEX CONCURRENTLY app_job_metadata_idx ON public.oxbow_job USING gin (metadata jsonb_path_ops);
+-- Periodically, as the table owner:
+REINDEX INDEX CONCURRENTLY app_job_metadata_idx;
+```
+
+`jsonb_path_ops` serves `@>`, the only operator the filter uses, at about half the size of the default operator class.
+Don't name it `oxbow_job_metadata_idx`: rolling schema version 3 back recreates an index with that name, and applying it
+again drops it.
 
 ## Bulk operations
 
