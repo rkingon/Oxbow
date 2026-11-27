@@ -451,7 +451,7 @@ public sealed class RateLimitTests(PostgresFixture database)
         }
     }
 
-    /// <summary>Asserts no second-long window holds more starts than GCRA allows: the burst, plus one per interval.</summary>
+    /// <summary>Asserts no second-long window holds more starts than GCRA allows: the rate, plus the burst less one.</summary>
     private static void AssertWithinRate(List<DateTime> starts, int perSecond, int burst)
     {
         for (int i = 0, j = 0; i < starts.Count; i++)
@@ -461,7 +461,7 @@ public sealed class RateLimitTests(PostgresFixture database)
                 j++;
             }
 
-            Assert.True(i - j + 1 <= perSecond + burst, $"{i - j + 1} starts in the second up to {starts[i]:O}.");
+            Assert.True(i - j + 1 <= perSecond + burst - 1, $"{i - j + 1} starts in the second up to {starts[i]:O}.");
         }
     }
 

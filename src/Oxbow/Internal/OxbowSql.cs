@@ -156,9 +156,9 @@ internal sealed class OxbowSql
             ),
             -- Walks the queue in order, @scan jobs a round, each round picking up where the last stopped and skipping
             -- keys that have used their room, until it has enough jobs or reaches the end. So a deep backlog with a
-            -- little room left can't fill the scan ahead of every other key, yet is read only once. A key's rank counts
-            -- its jobs taken in earlier rounds. Each full round takes at least one job (the first of each key in it), so
-            -- there are at most @max + 1.
+            -- little room left can't fill the scan ahead of every other key, and no round rescans what an earlier one
+            -- passed. A key's rank counts its jobs taken in earlier rounds. Each full round takes at least one job (the
+            -- first of each key in it), so there are at most @max + 1.
             scans (skip, ids, keys, after_priority, after_scheduled_at, after_id, done) AS (
                 SELECT ARRAY(SELECT partition_key FROM room WHERE room <= 0), ARRAY[]::bigint[], ARRAY[]::text[],
                     0::smallint, '-infinity'::timestamptz, 0::bigint, (SELECT n FROM allowed) = 0
