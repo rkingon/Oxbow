@@ -73,3 +73,9 @@ Initial Docker runs on Oxbow `6f77a34`, Apple M5, Docker Desktop Linux arm64 wit
 On Postgres 17, the fix author repeated the same two-node workload on `6f77a34` and `52b565d`: 10,000 older jobs for tenant A, then 200 for tenant B at 50/s. B's p99 claim wait fell from 19.457 s to 0.421 s. On the patched revision, all 200 B jobs started while A still had queued work. The original 100,000-job case remains part of qualification on the merged dev pack. [PR #15](https://github.com/rkingon/Oxbow/pull/15)
 
 After independent review, PR #15 merged into `main` at `2c79ae9`. The Postgres 16 and 17 CI jobs passed on the merged revision. [Main CI](https://github.com/rkingon/Oxbow/actions/runs/45940592978)
+
+## Deep-backlog investigation
+
+On the original revision, the burst investigator reproduced the deadline miss with durable writes. The fetch still used an index scan. Turning off the queue-depth observations made little difference. The investigator measured durable commits at 7–23 ms while idle and about 38 ms under load. The same 852,000-job workload with synchronous commits disabled drained in time and reconciled every job exactly once. This control supports a storage-throughput explanation on this host. The investigation closed without a product change. Qualification continues with synchronous commits enabled.
+
+On subsequent runs the harness records latency and admission gate failures while collecting later cohorts, and still exits unsuccessfully if any gate failed. After a missed burst drain deadline it allows a further bounded drain for per-ID reconciliation. This preserves the original deadline as a release gate.

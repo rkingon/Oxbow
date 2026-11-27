@@ -45,6 +45,7 @@ class Run:
         self.children = []
         self.phases = []
         self.workers = []
+        self.failed_gates = set()
         self.next_seq = 1
         self.begin = time.monotonic()
 
@@ -54,15 +55,24 @@ class Run:
         with (self.folder / "summary.jsonl").open("a") as out:
             print(json.dumps(record), file=out)
 
+    def gate(self, condition, message):
+        if not condition:
+            self.failed_gates.add(message)
+            self.report("gate-failed", reason=message)
+
     def start(self):
         command("docker", "network", "create", self.name)
         self.containers.append(self.pg)
+        diagnostics = ["-c", "shared_preload_libraries=pg_stat_statements", "-c", "log_lock_waits=on",
+                       "-c", "log_autovacuum_min_duration=0", "-c", "track_wal_io_timing=on"]
         command("docker", "run", "-d", "--name", self.pg, "--network", self.name,
                 "--network-alias", "db", "-e", "POSTGRES_PASSWORD=loadtest", self.options.postgres,
-                "-c", "max_connections=300")
+                "-c", "max_connections=300", *(diagnostics if self.options.scenario == "burst" else []))
         wait_for(lambda: subprocess.run(["docker", "exec", self.pg, "pg_isready", "-U", "postgres", "-h", "127.0.0.1"],
                                         capture_output=True).returncode == 0, "Postgres startup")
         self.app("init")
+        if self.options.scenario == "burst":
+            self.sql("create extension pg_stat_statements")
         settings = self.sql("select version(), current_setting('fsync'), current_setting('synchronous_commit')")
         require(settings.endswith("|on|on"), settings)
         self.report("environment", postgres=settings, runtime=command("docker", "run", "--rm", DOTNET, "dotnet", "--list-runtimes"),
@@ -201,8 +211,8 @@ class Run:
                     queueP99ms=float(stats[4]), jobsPerSecondIncludingDrain=round(count / float(stats[5]), 1),
                     offeredToAckP99ms=round(offered_latencies[math.ceil(.99*len(offered_latencies))-1], 1) if offered_latencies else None,
                     insertCallP99ms=round(latencies[math.ceil(.99*len(latencies))-1], 1) if latencies else None)
-        require(outage or unacknowledged == skipped, "Unexpected producer failure")
-        require(not skipped or self.options.scenario == "capacity", "Producer could not dispatch every offer")
+        self.gate(outage or unacknowledged == skipped, "Unexpected producer failure")
+        self.gate(not skipped or self.options.scenario == "capacity", "Producer could not dispatch every offer")
         require(allow_retries or not retried, "Unexpected retried jobs")
         return float(stats[4])
 
@@ -280,19 +290,28 @@ def burst(run):
     for phase in run.phases:
         phase.update(proc=proc, path=path)
     samples = run.sample(dict(proc=proc, path=path, label="continuous-burst", size=duration_total, rate=1))
-    run.drain()
+    try:
+        run.drain()
+    except TimeoutError:
+        run.gate(False, "Queue missed the 180-second drain deadline")
+        run.report("extended-drain", outstanding=run.depth())
+        run.drain(1800)
+    run.report("postgres", wal=run.sql("select wal_sync, wal_sync_time, wal_write, wal_write_time from pg_stat_wal"),
+               fetch=run.sql("""select calls,rows,total_exec_time from pg_stat_statements
+                   where query like 'WITH locked AS%' order by calls desc limit 1"""))
     for phase in run.phases:
         run.verify(phase)
     burst_start, burst_end = [float(run.sql(f"""
         select extract(epoch from min(created_at)) from oxbow_job
         where (args->>'seq')::int = {p['first']}""")) for p in run.phases[1:]]
-    baseline = [depth for t,depth in samples if t < burst_start and depth > 0]
-    threshold = max(max(baseline), 200)  # Two nodes, 100 worker slots each.
+    baseline = [depth for t,depth in samples if t < burst_start]
+    threshold = max(max(baseline, default=0), 200)  # Two nodes, 100 worker slots each.
     recovered = next((t for (t,d), (_,d2) in zip(samples,samples[1:])
                       if t >= burst_end and max(d,d2) <= threshold), None)
-    require(recovered is not None, "Queue did not recover during baseline traffic")
-    run.report("burst-drain", peakSampled=max(d for _,d in samples), baselineMedian=statistics.median(baseline),
-               threshold=threshold, secondsAfterBurst=round(recovered-burst_end, 2))
+    run.gate(recovered is not None, "Queue did not recover during baseline traffic")
+    run.report("burst-drain", peakSampled=max(d for _,d in samples),
+               baselineMedian=statistics.median(baseline) if baseline else None, threshold=threshold,
+               secondsAfterBurst=round(recovered-burst_end, 2) if recovered is not None else None)
 
 
 def hot(run):
@@ -361,7 +380,7 @@ def check_cohort(run, phase):
     wait_for(lambda: run.sql(f"""select exists(select from oxbow_job where finalized_at is null
         and (args->>'seq')::int >= {first} and (args->>'seq')::int < {end})""") == "f", "Soak cohort drain", 30)
     p99 = run.verify(phase)
-    require(p99 < 1000, f"{phase['label']} exceeded the one-second queue-wait gate")
+    run.gate(p99 < 1000, "Cohort exceeded the one-second queue-wait gate")
 
 
 def main():
@@ -382,6 +401,7 @@ def main():
     try:
         run.start()
         {"recovery": recovery, "capacity": capacity, "burst": burst, "hot": hot, "soak": soak}[options.scenario](run)
+        require(not run.failed_gates, ", ".join(sorted(run.failed_gates)))
         run.report("passed", scenario=options.scenario)
     except Exception as error:
         run.report("failed", scenario=options.scenario, reason=str(error))
