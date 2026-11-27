@@ -126,6 +126,7 @@ internal static class Traffic
         var api = args[5];
         var options = new InsertOptions { Queue = args[6], PartitionKey = args[7] };
         var pending = new List<Task>();
+        var loggedInsertFailure = 0;
         for (var offset = 0; offset < count; offset += batch)
         {
             var due = scheduled + TimeSpan.FromSeconds((double)offset / rate);
@@ -173,10 +174,14 @@ internal static class Traffic
                 }
                 Receipt(true);
             }
-            catch (NpgsqlException)
+            catch (NpgsqlException exception)
             {
                 // The verifier resolves each ambiguous range from durable job rows.
                 Receipt(false);
+                if (Interlocked.Exchange(ref loggedInsertFailure, 1) == 0)
+                {
+                    await Console.Error.WriteLineAsync(exception.ToString());
+                }
             }
 
             void Receipt(bool acknowledged)
