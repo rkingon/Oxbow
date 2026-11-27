@@ -174,7 +174,7 @@ internal static class Traffic
                 }
                 Receipt(true);
             }
-            catch (NpgsqlException exception)
+            catch (Exception exception) when (exception is NpgsqlException or TimeoutException)
             {
                 // The verifier resolves each ambiguous range from durable job rows.
                 Receipt(false);
