@@ -32,10 +32,12 @@ internal sealed class Producer(
     private readonly ConcurrentDictionary<long, DateTimeOffset> _pendingCancels = new();
     private volatile bool _paused;
 
-    // Bumped by every pause or resume notification. A database read that overlaps one is older than it, so the read
-    // is dropped rather than undoing the notification.
+    // A database read of the pause applies only if no notification arrived while it ran and no read issued after it
+    // has applied, so neither a notification nor a reconnect's resync is undone by an older read.
     private readonly Lock _pauseLock = new();
     private int _pauseVersion;
+    private long _pauseReads;
+    private long _pauseReadApplied;
     private int _resyncRequested;
 
     private readonly FetchLimits? _limits = FetchLimits.For(queueOptions);
@@ -469,20 +471,23 @@ internal sealed class Producer(
     private async Task RefreshPausedAsync(Func<CancellationToken, Task<bool>> read, CancellationToken cancellationToken)
     {
         int version;
+        long readId;
         lock (_pauseLock)
         {
             version = _pauseVersion;
+            readId = ++_pauseReads;
         }
 
         var paused = await read(cancellationToken).ConfigureAwait(false);
         bool resumed;
         lock (_pauseLock)
         {
-            if (version != _pauseVersion)
+            if (version != _pauseVersion || readId < _pauseReadApplied)
             {
                 return;
             }
 
+            _pauseReadApplied = readId;
             resumed = _paused && !paused;
             _paused = paused;
         }

@@ -1,4 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Oxbow.Internal;
 using Oxbow.Processing;
 
 namespace Oxbow.IntegrationTests;
@@ -47,16 +49,24 @@ public sealed class LifecycleTests(PostgresFixture database)
         await using var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions(),
             b => b.AddWorker<RecordArgs, RecordWorker>());
 
-        // The listener backs off a second after losing its connection; the pause lands inside that gap.
-        var listener = await WaitForListenerAsync(app, prefix, exceptPid: null);
+        // A job running proves the producer is past its startup read, so only a reconnect can catch the pause.
+        var ready = await app.Client.InsertAsync(new RecordArgs("ready"));
+        await app.WaitForStateAsync(ready.Job.Id, JobState.Completed);
+
+        var listener = await WaitForListenerAsync(app);
         await using (var kill = app.DataSource.CreateCommand("SELECT pg_terminate_backend(@pid)"))
         {
             kill.Parameters.AddWithValue("pid", listener);
             await kill.ExecuteNonQueryAsync();
         }
 
+        // The listener reconnects after a second's backoff. No listener right after the pause commits means none
+        // heard it.
+        await WaitAsync(async () => await FindListenerAsync(app) is null);
         await app.Client.PauseQueueAsync("default");
-        await WaitForListenerAsync(app, prefix, exceptPid: listener);
+        Assert.Null(await FindListenerAsync(app));
+
+        await WaitForListenerAsync(app);
         await Task.Delay(300);
 
         var result = await app.Client.InsertAsync(new RecordArgs("paused"));
@@ -67,24 +77,32 @@ public sealed class LifecycleTests(PostgresFixture database)
         await app.WaitForStateAsync(result.Job.Id, JobState.Completed);
     }
 
-    private static async Task<int> WaitForListenerAsync(TestApp app, string prefix, int? exceptPid)
+    private static async Task<int> WaitForListenerAsync(TestApp app)
+    {
+        int? pid = null;
+        await WaitAsync(async () => (pid = await FindListenerAsync(app)) is not null);
+        return pid!.Value;
+    }
+
+    private static async Task WaitAsync(Func<Task<bool>> condition)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        while (true)
+        while (!await condition())
         {
-            await using var command = app.DataSource.CreateCommand("""
-                SELECT pid FROM pg_stat_activity
-                WHERE query LIKE 'LISTEN %' AND query LIKE '%' || @prefix || '%' AND pid <> @except
-                """);
-            command.Parameters.AddWithValue("prefix", prefix);
-            command.Parameters.AddWithValue("except", exceptPid ?? 0);
-            if (await command.ExecuteScalarAsync(cts.Token) is int pid)
-            {
-                return pid;
-            }
-
             await Task.Delay(20, cts.Token);
         }
+    }
+
+    // The notifier's connection, once its LISTENs have all run: an idle backend whose last query is one of them.
+    private static async Task<int?> FindListenerAsync(TestApp app)
+    {
+        var sql = app.Host.Services.GetRequiredService<OxbowRuntime>().Sql;
+        string[] listens = [.. new[] { sql.InsertChannel, sql.ControlChannel, sql.LeadershipChannel, sql.SequenceChannel }
+            .Select(channel => $"LISTEN {Identifiers.Quote(channel)}")];
+        await using var command = app.DataSource.CreateCommand(
+            "SELECT pid FROM pg_stat_activity WHERE state = 'idle' AND query = ANY(@listens)");
+        command.Parameters.AddWithValue("listens", listens);
+        return await command.ExecuteScalarAsync() as int?;
     }
 
     [Fact]
