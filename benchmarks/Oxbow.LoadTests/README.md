@@ -90,3 +90,4 @@ The first merged-package Postgres 16 reproduction passed. Behind 10,000 older jo
 |---|---|
 | Matched PG16 rate-limited tenant run, 10,000 older jobs | Second-tenant p99 claim wait was 17.081 s on the baseline and 96 ms on the candidate. All 1,000 second-tenant jobs completed once on each revision. Both held the configured burst of 64. |
 | PG16 and PG17 recovery | Across leader kill, graceful stop and database restart, all 24,075 acknowledged background jobs completed. The 1,425 unacknowledged offers during the outages were absent on reconciliation. Each crash probe was rescued within 54.3 s, and its batch callback ran once. |
+| Matched PG17 rate-limited tenant run, 100,000 older jobs | Second-tenant p99 claim wait fell from 197.034 s on the baseline to 99.1 ms on the candidate. The candidate measured 101.2 ms with no older backlog. Each revision completed all 101,250 jobs once, and both held the configured burst of 64. |
