@@ -16,7 +16,12 @@ GRANT USAGE ON SEQUENCE public.oxbow_batch_id_seq TO "app_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_periodic_job TO "app_role";
 -- version 2: rate limiting
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.oxbow_rate_limit TO "app_role";
+-- version 3: job steps
+GRANT SELECT, INSERT ON public.oxbow_job_step TO "app_role";
 ```
+
+`oxbow_job_step` rows are deleted with their job by its foreign key's `ON DELETE CASCADE`, which Postgres runs as the
+table's owner, so the runtime role needs no `DELETE` on it.
 
 LISTEN and NOTIFY need no grant.
 

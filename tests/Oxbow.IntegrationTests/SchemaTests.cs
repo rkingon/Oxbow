@@ -124,6 +124,10 @@ public sealed class SchemaTests(PostgresFixture database)
         await MigrateAsync(prefix, 2, 3);
         Assert.Equal("", await GinIndexesAsync(prefix));
         Assert.Equal(jobs, await FingerprintAsync(prefix));
+        await database.ExecuteAsOwnerAsync($"""
+            INSERT INTO public.{prefix}job_step (job_id, name, output)
+            SELECT id, 'step', jsonb_build_object('n', id) FROM public.{prefix}job
+            """);
         Assert.Equal(100L, await database.ScalarAsOwnerAsync<long>(
             $$"""SELECT count(*) FROM public.{{prefix}}job WHERE metadata @> '{"tenant": "t1"}'"""));
 

@@ -89,7 +89,9 @@ Version 3 drops `{p}job_args_idx` and `{p}job_metadata_idx`. A GIN index never r
 indexed (vacuum only empties its posting list), so an index over values that differ per job, such as IDs in args or the
 output and heartbeat times Oxbow writes to metadata, grows with every job ever inserted rather than with the jobs kept,
 until a `REINDEX`. Nothing in Oxbow queries args by containment, and a `JobFilter.Metadata` filter scans only the
-retained rows.
+retained rows. It also adds `{p}job_step (job_id, name, output, created_at)`, keyed by `(job_id, name)`, for
+[steps](long-running-jobs.md#steps). `job_id` references `{p}job` with `ON DELETE CASCADE`, so the cleaner, `DeleteAsync`
+and the bulk deletes remove a job's steps without knowing about them; the primary key serves the cascade.
 
 The `{p}migration` table is a version marker that each script writes to. Nothing reads it as a migration runner. At
 startup the client checks `max(version)` against the version it requires and fails fast with a message naming the
@@ -125,6 +127,7 @@ GRANT SELECT ON {s}.{p}migration TO {role};
 GRANT USAGE ON SEQUENCE {s}.{p}job_id_seq TO {role};
 GRANT EXECUTE ON FUNCTION {s}.{p}job_state_in_bitmask(bit(8), {s}.{p}job_state) TO {role};
 GRANT SELECT, INSERT, UPDATE, DELETE ON {s}.{p}periodic_job TO {role};
+GRANT SELECT, INSERT ON {s}.{p}job_step TO {role};
 ```
 
 LISTEN/NOTIFY needs no grant. The runtime never runs DDL, never creates temp tables, never calls `SET` (or
@@ -303,6 +306,25 @@ retried, as in River. Encrypted args (the JSON string `"oxbow:enc:v1:…"`) are 
 A kind with no registered worker is handled the River way: the attempt fails with `UnknownJobKindException` in `errors`
 and retries with backoff. A rolling deploy heals itself, and a kind that's really gone ends up visibly `discarded` after
 max attempts.
+
+**Steps and attempt locks.** `JobControl`, the attempt's `IJobRuntime`, writes them directly rather than through the
+completer, because the worker can't continue until a step's result is known. A step first reads its recorded result
+and whether the attempt is current in one statement; a known-stale attempt throws `JobAttemptSupersededException`
+there, before replaying or running anything. After running, it records in one batch, so one implicit transaction:
+`SELECT … FOR SHARE` on the job row if the attempt is current, `INSERT … ON CONFLICT DO NOTHING`, then a read of the
+recorded result in a fresh snapshot, which sees a winner that committed while the insert waited. The `FOR SHARE` keeps
+the rescuer from taking the job between the check and the insert. The insert runs whether or not the attempt is
+current: a step in flight when its job was rescued did run, so its result is recorded if none is, and a superseded
+attempt is then told. Whether a result is encrypted follows the job's args, never the result's shape.
+`LockAttemptAsync` runs `SELECT 1 / count(*)` over the current attempt's row `FOR SHARE` in the caller's transaction:
+it conflicts with the `FOR NO KEY UPDATE` the rescuer and the completer take, not with the attempt's other
+transactions, and with no current attempt it divides by zero, failing the caller's transaction so it can't commit.
+Heartbeats and progress select their row `FOR NO KEY UPDATE SKIP LOCKED`, so a worker inside its own locked
+transaction doesn't wait on itself, and a skipped heartbeat doesn't count toward the throttle. The rescuer locks its
+candidates `SKIP LOCKED` and leaves a locked one for a later pass. After a worker that took the lock returns, the
+executor waits while the row is still locked (`FOR NO KEY UPDATE SKIP LOCKED` finds nothing) before queuing the outcome,
+so a transaction the worker left open holds only its own job, not the completer's batch. If shutdown comes first, the
+outcome isn't queued at all and the rescuer recovers the job.
 
 **Completer.** Outcomes are queued and written in batches through `JobSetStateIfRunningMany`: the completer flushes
 every 50 ms or at 5,000 rows, makes workers wait when the backlog reaches 20,000, and retries a failed batch three

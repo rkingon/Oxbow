@@ -50,7 +50,8 @@ The payload is a Data Protection payload: it carries the ID of the key that made
 This protects args from people who can read the database, not from people who can write to it: someone with write
 access can still replace a job's args with plaintext, or copy one job's payload onto another job of the same kind.
 
-Only args are encrypted. Kind, queue, tags, metadata and `errors` stay plaintext. Keep secrets out of tags and metadata,
+Only args, and the [step results](#step-results) of jobs whose args are encrypted, are encrypted. Kind, queue, tags,
+metadata, `errors` and the job's output stay plaintext. Keep secrets out of tags and metadata,
 and out of the messages of exceptions your workers throw: the message is recorded in `errors`.
 
 ## Where args are plaintext
@@ -74,6 +75,15 @@ var protector = services.GetRequiredService<IJobArgsProtector>();
 var job = await oxbow.GetAsync(id);
 JsonElement args = protector.UnprotectArgs(job!);   // unencrypted args come back as they are
 ```
+
+## Step results
+
+A job whose args are encrypted has its [step results](long-running-jobs.md#steps) encrypted too, with
+`IJobArgsProtector.ProtectStepResult(kind, json)`, stored in the same `oxbow:enc:v1:` envelope. Whether a result is
+decrypted follows the job's args, never the result's shape, so a plaintext result that happens to start with the prefix
+is read as plaintext. `AddArgsEncryption()` gives step results the purpose `Oxbow.StepResults` with the kind as
+sub-purpose, apart from `Oxbow.Args`, so a step result can't be replayed as args or the reverse. A recorded result
+that isn't its job's ciphertext, or can't be decrypted, fails the attempt.
 
 ## Key rotation
 
@@ -140,5 +150,8 @@ without a key store.
 
 ## Another key service
 
-`IJobArgsProtector` is the seam: `Protect(kind, json)`, `Unprotect(kind, payload)` and `HashUniqueKey(bytes)`.
-Register your own singleton (on a KMS, say) instead of calling `AddArgsEncryption()`.
+`IJobArgsProtector` is the seam: `Protect(kind, json)`, `Unprotect(kind, payload)` and `HashUniqueKey(bytes)`, plus
+`ProtectStepResult` and `UnprotectStepResult` for step results, which by default throw `NotSupportedException`, so a
+protector written before steps fails a step of an encrypted kind rather than storing its result in plaintext. Bind step
+results to a purpose apart from args. Register your own singleton (on a KMS, say) instead of calling
+`AddArgsEncryption()`.

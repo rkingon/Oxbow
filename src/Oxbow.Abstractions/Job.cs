@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Text.Json;
 
 namespace Oxbow;
@@ -101,6 +102,91 @@ public sealed class Job<TArgs>
         Progress = new JobProgress(percent, message, Attempt, _runtime?.UtcNow ?? DateTimeOffset.UtcNow);
         return _runtime?.ReportProgressAsync(percent, message, cancellationToken) ?? Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Runs a step whose result is recorded under <paramref name="name"/>, so a later execution of this job (after a
+    /// failed attempt, a snooze, a rescue, a shutdown or a retry) returns the recorded result instead of running it again.
+    /// A step that fails records nothing. At least once: an execution that dies after the step's effect but before its result
+    /// is recorded runs it again. Steps are heartbeats.
+    /// </summary>
+    /// <typeparam name="T">The result type, serialized with the client's <c>JsonSerializerOptions</c>.</typeparam>
+    /// <param name="name">
+    /// The step's identity within the job, at most 255 characters, and unique within an execution. Renaming a step runs it
+    /// again.
+    /// </param>
+    /// <param name="run">The step.</param>
+    /// <param name="cancellationToken">Passed to <paramref name="run"/>.</param>
+    /// <returns>The step's result, or the one recorded earlier, which wins if another execution recorded one first.</returns>
+    /// <exception cref="JobAttemptSupersededException">
+    /// This attempt is no longer the one running. Thrown before the step runs if that's already known; a step it was already
+    /// running still records its result if none is recorded yet.
+    /// </exception>
+    public async Task<T> StepAsync<T>(string name, Func<CancellationToken, Task<T>> run, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(run);
+        if (name.Length > MaxStepNameLength)
+        {
+            throw new ArgumentException($"A step name may be at most {MaxStepNameLength} characters.", nameof(name));
+        }
+
+        lock (_steps)
+        {
+            if (!_steps.Add(name))
+            {
+                throw new InvalidOperationException(
+                    $"Step '{name}' already ran in this execution of job {Id}. A step's name identifies its result, so it must be unique.");
+            }
+        }
+
+        try
+        {
+            return await (_runtime?.StepAsync(name, run, cancellationToken) ?? run(cancellationToken)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Nothing was recorded, so the worker may try the step again.
+            lock (_steps)
+            {
+                _steps.Remove(name);
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc cref="StepAsync{T}(string, Func{CancellationToken, Task{T}}, CancellationToken)"/>
+    public Task StepAsync(string name, Func<CancellationToken, Task> run, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        return StepAsync<object?>(name, async ct =>
+        {
+            await run(ct).ConfigureAwait(false);
+            return null;
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Locks the job's row in <paramref name="transaction"/> until it commits or rolls back, provided this attempt is
+    /// still the one running; otherwise fails the transaction, so nothing written in it can commit, and throws. While it's
+    /// held, the rescuer can't take the job, so the transaction commits only as this attempt's. Under
+    /// <c>REPEATABLE READ</c>, lock first: a later lock fails on any write to the row since the snapshot. Commit before
+    /// the worker returns: the attempt's outcome waits for the lock. Heartbeats and progress are skipped while it's held.
+    /// Does nothing without a runtime.
+    /// </summary>
+    /// <param name="transaction">An open transaction on the database Oxbow uses.</param>
+    /// <param name="cancellationToken">Cancels the lock.</param>
+    /// <returns>A task that completes when the row is locked.</returns>
+    /// <exception cref="JobAttemptSupersededException">This attempt is no longer the one running.</exception>
+    public Task LockAttemptAsync(DbTransaction transaction, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        return _runtime?.LockAttemptAsync(transaction, cancellationToken) ?? Task.CompletedTask;
+    }
+
+    private const int MaxStepNameLength = 255;
+
+    private readonly HashSet<string> _steps = new(StringComparer.Ordinal);
 
     /// <summary>The batch this job is a member or callback of.</summary>
     public long? BatchId => Row.BatchId;

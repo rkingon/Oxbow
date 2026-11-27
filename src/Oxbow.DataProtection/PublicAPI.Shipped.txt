@@ -10,3 +10,5 @@ Oxbow.DataProtection.DataProtectionJobArgsProtector.HashUniqueKey(System.ReadOnl
 Oxbow.DataProtection.DataProtectionJobArgsProtector.Protect(string! kind, string! args) -> string!
 Oxbow.DataProtection.DataProtectionJobArgsProtector.Unprotect(string! kind, string! payload) -> string!
 static Microsoft.Extensions.DependencyInjection.OxbowDataProtectionBuilderExtensions.AddArgsEncryption(this Microsoft.Extensions.DependencyInjection.IOxbowBuilder! builder, System.Action<Oxbow.DataProtection.ArgsEncryptionOptions!>? configure = null) -> Microsoft.Extensions.DependencyInjection.IOxbowBuilder!
+Oxbow.DataProtection.DataProtectionJobArgsProtector.ProtectStepResult(string! kind, string! result) -> string!
+Oxbow.DataProtection.DataProtectionJobArgsProtector.UnprotectStepResult(string! kind, string! payload) -> string!

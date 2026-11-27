@@ -1,6 +1,5 @@
 #nullable enable
 abstract Oxbow.PeriodicSchedule.GetNextOccurrence(System.DateTimeOffset from) -> System.DateTimeOffset?
-const Oxbow.OxbowSchema.LatestVersion = 2 -> int
 Microsoft.Extensions.DependencyInjection.IOxbowBuilder
 Microsoft.Extensions.DependencyInjection.IOxbowBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
 Microsoft.Extensions.DependencyInjection.OxbowBuilderExtensions
@@ -217,7 +216,6 @@ static Oxbow.OxbowMigration.operator !=(Oxbow.OxbowMigration? left, Oxbow.OxbowM
 static Oxbow.OxbowMigration.operator ==(Oxbow.OxbowMigration? left, Oxbow.OxbowMigration? right) -> bool
 static Oxbow.OxbowSchema.GetGrants(string! role, int version, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
 static Oxbow.OxbowSchema.GetGrants(string! role, string! schema = "public", string! tablePrefix = "oxbow_") -> string!
-static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 2, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
 static Oxbow.PeriodicJob.operator !=(Oxbow.PeriodicJob? left, Oxbow.PeriodicJob? right) -> bool
 static Oxbow.PeriodicJob.operator ==(Oxbow.PeriodicJob? left, Oxbow.PeriodicJob? right) -> bool
 static Oxbow.PeriodicJobListQuery.operator !=(Oxbow.PeriodicJobListQuery? left, Oxbow.PeriodicJobListQuery? right) -> bool
@@ -671,3 +669,13 @@ Oxbow.JobRetryException (forwarded, contained in Oxbow.Abstractions)
 Oxbow.JobRetryException.Delay.get -> System.TimeSpan (forwarded, contained in Oxbow.Abstractions)
 Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void (forwarded, contained in Oxbow.Abstractions)
 Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void (forwarded, contained in Oxbow.Abstractions)
+const Oxbow.OxbowSchema.LatestVersion = 3 -> int
+static Oxbow.OxbowSchema.GetMigrations(int fromVersion, int toVersion = 3, string! schema = "public", string! tablePrefix = "oxbow_") -> System.Collections.Generic.IReadOnlyList<Oxbow.OxbowMigration!>!
+Oxbow.Job<TArgs>.LockAttemptAsync(System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task! (forwarded, contained in Oxbow.Abstractions)
+Oxbow.Job<TArgs>.StepAsync(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! run, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task! (forwarded, contained in Oxbow.Abstractions)
+Oxbow.Job<TArgs>.StepAsync<T>(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>!>! run, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T>! (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobAttemptSupersededException (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobAttemptSupersededException.JobAttemptSupersededException(long jobId) -> void (forwarded, contained in Oxbow.Abstractions)
+Oxbow.JobAttemptSupersededException.JobId.get -> long (forwarded, contained in Oxbow.Abstractions)
+Oxbow.IJobArgsProtector.ProtectStepResult(string! kind, string! result) -> string!
+Oxbow.IJobArgsProtector.UnprotectStepResult(string! kind, string! payload) -> string!
