@@ -258,6 +258,87 @@ public sealed class RateLimitTests(PostgresFixture database)
         Assert.Equal(1L, await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM {prefix}job WHERE state = 'available'"));
     }
 
+    // Each deep key's backlog alone fills the scan window (four per slot), and each has room for only some of it.
+    [Theory]
+    [InlineData("rate")]
+    [InlineData("concurrency")]
+    public async Task Deep_keys_with_some_room_dont_hide_the_keys_behind_them(string limit)
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var sql = new OxbowSql("public", prefix);
+        var limits = RoomOfTwo(limit);
+        foreach (var key in new[] { "a", "b", "c" })
+        {
+            await app.Client.InsertManyFastAsync(Enumerable.Range(0, 50).Select(_ => new InsertManyItem(new LimitedArgs(key))));
+        }
+
+        await app.Client.InsertManyAsync(Enumerable.Range(0, 3).Select(_ => new InsertManyItem(new LimitedArgs("d"))));
+
+        var fetch = await FetchAsync(app, sql, limits);
+        Assert.Equal(["a", "a", "b", "b", "c", "c", "d", "d"], fetch.Jobs.Select(j => j.PartitionKey![13..^2]).Order());
+    }
+
+    // Round one's window holds one of a's jobs, under its room, and fills with x; round two finds the rest of a's.
+    [Theory]
+    [InlineData("rate")]
+    [InlineData("concurrency")]
+    public async Task A_key_seen_in_two_scan_rounds_still_gets_only_its_room(string limit)
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var sql = new OxbowSql("public", prefix);
+        await app.Client.InsertAsync(new LimitedArgs("a"));
+        await app.Client.InsertManyFastAsync(Enumerable.Range(0, 50).Select(_ => new InsertManyItem(new LimitedArgs("x"))));
+        await app.Client.InsertManyAsync(Enumerable.Range(0, 5).Select(_ => new InsertManyItem(new LimitedArgs("a"))));
+
+        var fetch = await FetchAsync(app, sql, RoomOfTwo(limit));
+        Assert.Equal(["a", "a", "x", "x"], fetch.Jobs.Select(j => j.PartitionKey![13..^2]).Order());
+    }
+
+    [Fact]
+    public async Task A_fetch_fills_from_the_queue_head_when_nothing_is_held_back()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix);
+        var sql = new OxbowSql("public", prefix);
+        var limits = new FetchLimits(null, PartitionRate: new RateLimit(1, TimeSpan.FromHours(1)) { Burst = 100 });
+        var inserted = await app.Client.InsertManyAsync(new[] { "a", "b" }.SelectMany(key =>
+            Enumerable.Range(0, 30).Select(_ => new InsertManyItem(new LimitedArgs(key)))));
+
+        var fetch = await FetchAsync(app, sql, limits);
+        Assert.Equal(inserted.Take(10).Select(i => i.Job.Id), fetch.Jobs.Select(j => j.Id).Order());
+    }
+
+    [Fact]
+    public async Task A_cold_key_progresses_behind_a_rate_limited_backlog_across_two_nodes()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        void Configure(OxbowOptions o) => o.Queues["default"] = new QueueOptions
+        {
+            MaxWorkers = 100,
+            PartitionRateLimit = new(500, TimeSpan.FromSeconds(1)) { Burst = 64 },
+        };
+        await using var a = await StartAsync(prefix, Configure);
+        await using var b = await StartAsync(prefix, Configure);
+
+        await a.Client.InsertManyFastAsync(Enumerable.Range(0, 5_000)
+            .Select(_ => new InsertManyItem(new LimitedArgs("hot", DelayMilliseconds: 50))));
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        await a.Client.InsertManyAsync(Enumerable.Range(0, 20)
+            .Select(_ => new InsertManyItem(new LimitedArgs("cold", DelayMilliseconds: 50))));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (await database.ScalarAsOwnerAsync<long>(
+            $"SELECT count(*) FROM {prefix}job WHERE state = 'completed' AND partition_key = '{{\"customer\":\"cold\"}}'") < 20)
+        {
+            await Task.Delay(50, cts.Token);
+        }
+
+        Assert.True(await database.ScalarAsOwnerAsync<long>($"SELECT count(*) FROM {prefix}job WHERE state = 'available'") > 1_000);
+        AssertWithinRate(await StartsAsync(prefix, "hot"), 500, 64);
+    }
+
     [Fact]
     public async Task Maintenance_deletes_partition_limiters_once_they_have_caught_up()
     {
@@ -357,6 +438,10 @@ public sealed class RateLimitTests(PostgresFixture database)
         return await Producer.FetchLimitedAsync(batch, sql, "default", limits, 10, "test", [], [], default);
     }
 
+    private static FetchLimits RoomOfTwo(string limit) => limit == "rate"
+        ? new FetchLimits(null, PartitionRate: new RateLimit(1, TimeSpan.FromHours(1)) { Burst = 2 })
+        : new FetchLimits(new ConcurrencyLimit { Global = 2 });
+
     /// <summary>Asserts consecutive starts are at least <paramref name="interval"/> apart, and at most <paramref name="late"/> more.</summary>
     private static void AssertSpacing(List<DateTime> starts, TimeSpan interval, TimeSpan? late = null)
     {
@@ -364,6 +449,20 @@ public sealed class RateLimitTests(PostgresFixture database)
         {
             var gap = starts[i] - starts[i - 1];
             Assert.True(gap >= interval && (late is null || gap <= interval + late), $"Starts {i - 1} and {i} are {gap.TotalMilliseconds} ms apart.");
+        }
+    }
+
+    /// <summary>Asserts no second-long window holds more starts than GCRA allows: the burst, plus one per interval.</summary>
+    private static void AssertWithinRate(List<DateTime> starts, int perSecond, int burst)
+    {
+        for (int i = 0, j = 0; i < starts.Count; i++)
+        {
+            while (starts[i] - starts[j] >= TimeSpan.FromSeconds(1))
+            {
+                j++;
+            }
+
+            Assert.True(i - j + 1 <= perSecond + burst, $"{i - j + 1} starts in the second up to {starts[i]:O}.");
         }
     }
 

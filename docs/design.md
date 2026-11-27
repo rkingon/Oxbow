@@ -282,12 +282,12 @@ producer needs no locks:
   fetch, and running jobs finish;
 - on start, the producer upserts its `{p}queue` row (River's `QueueCreateOrSetUpdatedAt`);
 - a queue with a `ConcurrencyLimit` fetches with `GetAvailableLimited` instead, which leaves out keys at their limit and
-  takes at most each key's room. The producer sends its running count per key (held until each outcome is written) for
+  takes at most each key's room, scanning on past keys that have had it until the fetch is full or the queue ends. The producer sends its running count per key (held until each outcome is written) for
   the local limit. With a global limit, the fetch runs in one batch after a lock on the queue's `{p}queue` row, as a
   separate statement so the count's snapshot postdates the lock. See [concurrency limits](concurrency-limits.md);
 - a queue with a `RateLimit` or `PartitionRateLimit` takes the same path, always behind the queue lock. The fetch caps
   its `LIMIT` and each key's room by what the GCRA limiters (`{p}queue.rate_limit_tat`, `{p}rate_limit` per key) allow
-  at the statement's time (taken after the lock, unlike `now()`), and advances them by the jobs it started; a third
+  at the statement's time (taken after the lock, unlike `now()`), and advances them by the jobs it started; a last
   statement returns how long until the next start is due, and the producer wakes then, skipping the fetch cooldown and
   fetching nothing before it. See [rate limiting](rate-limiting.md).
 

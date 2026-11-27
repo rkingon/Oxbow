@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A partition key with a deep backlog and some room left under its `ConcurrencyLimit` or `PartitionRateLimit` could
+  fill a limited fetch's scan, so other keys' jobs behind it never started while workers sat free. Under a
+  `PartitionRateLimit` the key's allowance refills between fetches, so this could last as long as its backlog. The
+  fetch now scans on past keys that have had their room until it's full or the queue ends.
+- Limited fetches turn off JIT for their transaction.
+
 ## [0.2.0-alpha.3] - 2026-11-26
 
 Worker-chosen retry delays. No schema change.

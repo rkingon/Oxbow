@@ -46,9 +46,10 @@ own queue.
 ## How it's enforced
 
 Limits are enforced when jobs are fetched. A key at its limit isn't fetched, so its jobs stay `available` and spend no
-attempt; the free workers go to other keys. Keys at their limit are filtered out before the fetch's scan limit, so a
-large backlog for one key can't hide other keys' jobs behind it. The scan still reads past that backlog on each fetch,
-so its cost grows with it: on Postgres 17, 200,000 jobs of a full key queued ahead add about 120 ms to every fetch of
+attempt; the free workers go to other keys. The fetch scans the queue in order and stops taking a key's jobs once it
+has its room, scanning on past them until the fetch is full, so a large backlog for one key, at its limit or with a
+little room left, can't hide other keys' jobs behind it. The scan still reads past that backlog on each fetch, so its
+cost grows with it: on Postgres 17, 200,000 jobs of a full key queued ahead add about 120 ms to every fetch of
 the queue.
 
 - **Local:** the producer counts its running jobs per key and sends them with the fetch. A job counts until its outcome
