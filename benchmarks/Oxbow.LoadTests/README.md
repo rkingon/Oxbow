@@ -83,3 +83,5 @@ On subsequent runs the harness records latency and admission gate failures while
 ## Merged dev pack
 
 The candidate uses six local NuGet packages at `1.0.0-dev.g2c79ae9` from clean product revision `2c79ae99c4a5f9f28cfd9e20569f1578b856a860`. The baseline control uses `1.0.0-dev.g6f77a34`. Both use harness `3493452`. Each harness resolved Oxbow and Oxbow.Abstractions as packages. The published DLLs matched their NuGet archives byte for byte and both archives identified the expected product commit.
+
+The first merged-package Postgres 16 reproduction passed. Behind 10,000 older jobs, the second tenant's p99 wait was 88.3 ms, compared with 14.865 s in the original shared-host run. All 11,250 offers completed once and the measured burst equivalent was 64. This preliminary result precedes the matched runs with host headroom.
