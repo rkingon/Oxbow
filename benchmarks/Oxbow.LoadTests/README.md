@@ -23,6 +23,20 @@ python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 480
 python3 benchmarks/Oxbow.LoadTests/run.py capacity --seconds 300
 ```
 
+To test a merged candidate as a NuGet consumer, pack a clean product checkout into a local feed. From the harness checkout, publish with the same version and the absolute feed path, then run the profiles above.
+
+```sh
+# In the product checkout
+version="1.0.0-dev.g$(git rev-parse --short HEAD)"
+feed="$(pwd)/artifacts/dev-pack"
+dotnet pack Oxbow.slnx -c Release -p:Version="$version" -o "$feed"
+
+# In the harness checkout, with the same version and feed variables
+dotnet publish benchmarks/Oxbow.LoadTests -c Release \
+  -p:OxbowPackageVersion="$version" -p:RestoreAdditionalProjectSources="$feed" \
+  -o benchmarks/Oxbow.LoadTests/bin/Release/publish
+```
+
 Each invocation creates a private Docker network, a Postgres container with its own volume, one container per worker, and separate producer containers. The Python controller runs on the host. It prints the artifact directory on startup and removes its containers, volume, and network on exit. The artifact directory keeps the producer receipts, sampled metrics, worker log tails, and JSONL summary. A failed check exits nonzero.
 
 | Profile | Workload and checks |
