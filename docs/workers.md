@@ -63,9 +63,8 @@ var result = job?.GetOutput<ResizeResult>(jsonOptions);  // or job.Output, the r
   in `errors`, and one that can't be serialized fails it with the serializer's exception; either way the job is retried
   like any other failure. Store large results elsewhere and record a reference: the output lives in the job row.
 - A retried job (`RetryAsync`) keeps its previous output until it completes again.
-- As in River, the output is merged into the row even if the job is no longer running by the time the completion is
-  written (the rescuer took it after its timeout and it was retried, discarded or cancelled). The state isn't changed,
-  but the late output replaces any output already there.
+- An attempt the rescuer took over can't record output: its completion is written only while it's still the attempt
+  running, so a late one neither changes the state nor replaces output a replacement recorded.
 
 ## Timeouts
 
@@ -94,19 +93,21 @@ public async Task WorkAsync(Job<ImportCsv> job, CancellationToken cancellationTo
   calls within a tenth of `RescueStuckJobsAfter` (30 s at most) of the last write do nothing, so call it as often as
   is convenient.
 - `job.ReportProgressAsync(percent, message)` writes `oxbow:progress` (`percent` 0–100, `message` of at most 1,000
-  characters, `attempt`, `at`) and counts as a heartbeat; out-of-range values throw. It isn't throttled; every call is a write to the job's row, so report at a sensible
-  cadence.
+  characters, `attempt`, `at`) and counts as a heartbeat; out-of-range values throw. It isn't throttled: every call
+  writes the job's row unless the write is skipped (below), so report at a sensible cadence.
 - Read them with `GetAsync` or `ListAsync`: `JobRow.Progress` and `JobRow.HeartbeatAt`. `job.Progress` is what this
   attempt last reported.
 - Neither is reset when a new attempt starts, and both stay after the job finishes. They belong to the current execution
   when `Progress.At` and `HeartbeatAt` are at or after `AttemptedAt`. The attempt number alone isn't enough: a snooze
   or a shutdown hands the same number to the next execution.
 - Writes only land while this attempt is the one running. After the job finishes, or is rescued and picked up again,
-  they do nothing.
+  they do nothing. They're also skipped while the job's row is locked, such as by the attempt's own
+  [`LockAttemptAsync`](long-running-jobs.md#superseded-attempts) transaction.
 - **An attempt that heartbeats is judged by its heartbeat.** The [rescuer](maintenance.md) leaves it alone, however
   long it runs, until `RescueStuckJobsAfter` (1 h) passes without one. Then it's rescued even if it has no timeout or
   its timeout hasn't elapsed, so a job that heartbeats must keep doing so: no single step may run longer than
   `RescueStuckJobsAfter` without a heartbeat.
+- For work that should resume where it was after an attempt ends, see [long-running jobs](long-running-jobs.md).
 - Outside Oxbow's executor (a `Job<TArgs>` created in a unit test, or `WorkerHarness`) heartbeats do nothing and
   progress only updates `job.Progress`; `WorkResult.Progress` reports it.
 

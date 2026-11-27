@@ -17,6 +17,7 @@ internal sealed class OxbowSql
         var periodic = $"{schema}.{prefix}periodic_job";
         var batch = $"{schema}.{prefix}batch";
         var rateLimit = $"{schema}.{prefix}rate_limit";
+        var step = $"{schema}.{prefix}job_step";
 
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
@@ -609,7 +610,16 @@ internal sealed class OxbowSql
             LIMIT @max
             """;
 
+        // A row locked by its attempt's LockAttemptAsync transaction is left for a later pass rather than holding up the
+        // batch until that transaction ends.
         RescueMany = $"""
+            WITH locked AS (
+                SELECT id FROM {job} AS l
+                WHERE id = ANY(@id::bigint[])
+                  AND state = 'running'
+                  AND {LastSeen("l")} < @stuck_horizon
+                FOR NO KEY UPDATE SKIP LOCKED
+            )
             UPDATE {job} AS j
             SET
                 errors = array_append(j.errors, r.error::jsonb),
@@ -622,19 +632,24 @@ internal sealed class OxbowSql
                 state = r.state::{state}
             FROM unnest(@id::bigint[], @error::text[], @finalized_at::timestamptz[], @scheduled_at::timestamptz[], @state::text[])
                 AS r(id, error, finalized_at, scheduled_at, state)
+            JOIN locked ON locked.id = r.id
             WHERE j.id = r.id
-              AND j.state = 'running'
-              AND {LastSeen("j")} < @stuck_horizon
             RETURNING {Columns("j")}
             """;
 
-        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing.
+        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing. A locked row is skipped:
+        // the lock may be the attempt's own LockAttemptAsync, held by the worker that's waiting on this write.
+        var currentAttemptUnlessLocked = $"""
+            id = (
+                SELECT id FROM {job}
+                WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at
+                FOR NO KEY UPDATE SKIP LOCKED)
+            """;
+
         Heartbeat = $"""
             UPDATE {job}
             SET metadata = metadata || jsonb_build_object('oxbow:heartbeat_at', now())
-            WHERE id = @id
-              AND state = 'running'
-              AND attempted_at = @attempted_at
+            WHERE {currentAttemptUnlessLocked}
             """;
 
         ReportProgress = $"""
@@ -643,10 +658,43 @@ internal sealed class OxbowSql
                 'oxbow:heartbeat_at', now(),
                 'oxbow:progress', jsonb_build_object(
                     'percent', @percent::float8, 'message', @message::text, 'attempt', attempt, 'at', now()))
-            WHERE id = @id
-              AND state = 'running'
-              AND attempted_at = @attempted_at
+            WHERE {currentAttemptUnlessLocked}
             """;
+
+        var isCurrentAttempt = $"SELECT 1 FROM {job} WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at";
+
+        // FOR SHARE conflicts with the FOR NO KEY UPDATE the rescuer's and the completer's updates take, so they wait for
+        // the caller's transaction, but not with the attempt's other transactions holding it too. With no current attempt
+        // it divides by zero, failing the caller's transaction so nothing it wrote can commit.
+        LockAttempt = $"SELECT 1 / count(*) FROM ({isCurrentAttempt} FOR SHARE) AS current_attempt";
+
+        // Whether something other than this check holds the job's row: after its worker returns, an attempt whose lock is
+        // still held would make the completer's batch wait.
+        AttemptLockHeld = $"""
+            SELECT EXISTS (SELECT 1 FROM {job} WHERE id = @id)
+               AND NOT EXISTS (SELECT 1 FROM {job} WHERE id = @id FOR NO KEY UPDATE SKIP LOCKED)
+            """;
+
+        StepGet = $"""
+            SELECT
+                (SELECT output::text FROM {step} WHERE job_id = @id AND name = @name),
+                EXISTS ({isCurrentAttempt})
+            """;
+
+        // Recording runs as one batch, so in one transaction. The FOR SHARE makes the current-attempt check hold until
+        // the result is in: the rescuer can't take the job in between. The insert runs whether or not the attempt is
+        // current, since a step already in flight when the job was rescued did run, and the first result recorded wins.
+        // The last statement takes a fresh snapshot, so it reads the winner even if it committed while the insert waited.
+        StepRecordLock = $"{isCurrentAttempt} FOR SHARE";
+
+        StepRecordInsert = $"""
+            INSERT INTO {step} (job_id, name, output)
+            VALUES (@id, @name, @output::jsonb)
+            ON CONFLICT (job_id, name) DO NOTHING
+            RETURNING true
+            """;
+
+        StepRecordRead = $"SELECT output::text FROM {step} WHERE job_id = @id AND name = @name";
 
         DeleteFinalized = $"""
             DELETE FROM {job}
@@ -1133,6 +1181,18 @@ internal sealed class OxbowSql
     public string Heartbeat { get; }
 
     public string ReportProgress { get; }
+
+    public string LockAttempt { get; }
+
+    public string AttemptLockHeld { get; }
+
+    public string StepGet { get; }
+
+    public string StepRecordLock { get; }
+
+    public string StepRecordInsert { get; }
+
+    public string StepRecordRead { get; }
 
     public string DeleteFinalized { get; }
 

@@ -25,6 +25,7 @@ using System.Runtime.CompilerServices;
 [assembly: TypeForwardedTo(typeof(Oxbow.JobListQuery))]
 [assembly: TypeForwardedTo(typeof(Oxbow.JobListResult))]
 [assembly: TypeForwardedTo(typeof(Oxbow.JobProgress))]
+[assembly: TypeForwardedTo(typeof(Oxbow.JobAttemptSupersededException))]
 [assembly: TypeForwardedTo(typeof(Oxbow.JobRetryException))]
 [assembly: TypeForwardedTo(typeof(Oxbow.JobRow))]
 [assembly: TypeForwardedTo(typeof(Oxbow.JobSnoozeException))]

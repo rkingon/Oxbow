@@ -6,15 +6,19 @@ namespace Oxbow.DataProtection;
 
 /// <summary>
 /// An <see cref="IJobArgsProtector"/> on ASP.NET Core Data Protection. Payloads carry their key ID, so jobs encrypted
-/// before a key rotation still decrypt. Each kind gets its own purpose, so a payload can't be replayed as another kind.
+/// before a key rotation still decrypt. Each kind gets its own purpose, and step results one apart from args, so a payload
+/// can't be replayed as another kind, or a step result as args.
 /// </summary>
 public sealed class DataProtectionJobArgsProtector : IJobArgsProtector
 {
     private const string Purpose = "Oxbow.Args";
+    private const string StepResultPurpose = "Oxbow.StepResults";
     private const int MinSecretLength = 32;
     private readonly IDataProtector _root;
+    private readonly IDataProtector _stepRoot;
     private readonly byte[]? _uniqueKeySecret;
     private readonly ConcurrentDictionary<string, IDataProtector> _byKind = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IDataProtector> _stepsByKind = new(StringComparer.Ordinal);
 
     /// <summary>Creates the protector.</summary>
     /// <param name="provider">The Data Protection provider. Every node must share its key ring.</param>
@@ -28,6 +32,7 @@ public sealed class DataProtectionJobArgsProtector : IJobArgsProtector
         }
 
         _root = provider.CreateProtector(Purpose);
+        _stepRoot = provider.CreateProtector(StepResultPurpose);
         _uniqueKeySecret = uniqueKeySecret?.ToArray();
     }
 
@@ -36,6 +41,12 @@ public sealed class DataProtectionJobArgsProtector : IJobArgsProtector
 
     /// <inheritdoc />
     public string Unprotect(string kind, string payload) => ForKind(kind).Unprotect(payload);
+
+    /// <inheritdoc />
+    public string ProtectStepResult(string kind, string result) => StepsOf(kind).Protect(result);
+
+    /// <inheritdoc />
+    public string UnprotectStepResult(string kind, string payload) => StepsOf(kind).Unprotect(payload);
 
     /// <inheritdoc />
     public byte[] HashUniqueKey(ReadOnlySpan<byte> uniqueKey)
@@ -51,4 +62,6 @@ public sealed class DataProtectionJobArgsProtector : IJobArgsProtector
     }
 
     private IDataProtector ForKind(string kind) => _byKind.GetOrAdd(kind, static (k, root) => root.CreateProtector(k), _root);
+
+    private IDataProtector StepsOf(string kind) => _stepsByKind.GetOrAdd(kind, static (k, root) => root.CreateProtector(k), _stepRoot);
 }
