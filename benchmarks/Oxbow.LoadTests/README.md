@@ -158,4 +158,4 @@ At the four-hour midpoint, the harness had scheduled 17,280,000 offers for RC1. 
 
 During minutes 175–234, RC1 sustained 1,200 offers/s for a full hour inside the soak. All 4,320,000 offers completed on their first attempt. The highest one-minute p99 queue wait was 102.4 ms. At the end of the hour the job indexes occupied 116.6 MiB.
 
-The single-insert producer skipped 118 offers in minute 249 and 139 in minute 252. Host samples reached 0% idle in both windows. Queue-wait p99 was 138 ms and 232 ms respectively. Through minute 254, all 17,737,355 acknowledgments reconciled on the first attempt and the job indexes still occupied 116.6 MiB.
+The single-insert producer skipped 118 offers in minute 249 and 139 in minute 252. Host samples reached 0% idle in both windows. Queue-wait p99 was 138 ms and 232 ms respectively. In minutes 255–264 the single-insert producer skipped another 375 offers across two minutes. The highest one-minute p99 in this interval was 713.3 ms. Through minute 264, all 18,456,980 acknowledgments reconciled on the first attempt and the job indexes still occupied 116.6 MiB.
