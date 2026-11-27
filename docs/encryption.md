@@ -114,8 +114,8 @@ encrypted and an unencrypted kind doesn't match across them.
 
 ## Querying args
 
-The `args` GIN index is no use for encrypted kinds: `args @> '{"email": …}'` can't match ciphertext. Query by kind,
-queue, tags or metadata instead.
+`args @> '{"email": …}'` can't match ciphertext, so ad hoc queries on an encrypted kind's args find nothing. Query by
+kind, queue, tags or metadata instead.
 
 ## Upgrading a fleet
 
