@@ -150,6 +150,8 @@ The [per-minute soak results](results/3364be0-soak.csv) contain reconciled count
 
 At the final sample the job table occupied 131.08 MiB and indexes occupied 117.06 MiB. At matched volume near 9.1 million completions, table and indexes together occupied 249 MiB on this build and 1,517 MiB on `2c79ae9`. Across the full soak, all 65 latency misses and 564,104 of 564,922 skips occurred in minutes with at least one host CPU sample at or below 10% idle. The 248 other minutes had zero latency misses and 818 skips. All failures count toward qualification on this shared host.
 
+A separate CI investigation reproduced a worker starting jobs on a paused queue during listener startup or reconnect. The regression failed on the prior code and passed on PostgreSQL 16 and 17 with the fix. [PR #20](https://github.com/rkingon/Oxbow/pull/20) merged as `c29cff8`; [merged-main CI](https://github.com/rkingon/Oxbow/actions/runs/46077456117) passed. The load profiles reported here use `3364be0` and predate this fix.
+
 ### Standalone 30-minute runs
 
 Each run starts a fresh PostgreSQL instance and schedules 1,200 offers/s on the same dev package and harness as the eight-hour soak.
