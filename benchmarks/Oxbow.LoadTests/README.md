@@ -159,6 +159,9 @@ Each run starts a fresh PostgreSQL instance and schedules 1,200 offers/s on the 
 | Run | Offered | Acknowledged and completed on first attempt | Producer skips | Uncertain IDs | Highest one-minute p99 wait | Verdict |
 |---|---:|---:|---:|---:|---:|---|
 | 1 | 2,160,000 | 2,137,279 | 22,721 | 0 | 898.6 ms | Admission failed in nine minutes. All 30 cohorts met the drain and queue-wait limits. |
+| 2 | 2,160,000 | 2,123,303 | 36,697 | 0 | 1,467.8 ms | Admission failed in seven minutes and queue wait failed in four. All 30 cohorts drained on time. |
+
+Qualification paused for a quieter host two full minutes into run 3. All 144,000 offers in those two minutes completed on their first attempt. The partial run has no 30-minute verdict. Recovery, fairness, concurrency, burst and capacity profiles on this package remain pending.
 
 ### Run history
 
