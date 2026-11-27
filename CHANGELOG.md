@@ -5,7 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Schema version 3: apply `OxbowSchema.GetMigrations(2, 3)` before upgrading.
+
 ### Fixed
+
+- Schema version 3 drops the GIN index on `oxbow_job.args`. A GIN index keeps an entry for every distinct value it has
+  ever indexed, so with per-job values in args (IDs, sequence numbers) it grew with every job inserted, not with the
+  jobs kept, and only a `REINDEX` reclaimed it. At 1,200 jobs/s with five-minute retention it reached 204 MB in 38
+  minutes over about 370,000 live rows. Nothing in Oxbow queries args by containment; add your own index if you do.
 
 - A partition key with a deep backlog and some room left under its `ConcurrencyLimit` or `PartitionRateLimit` could
   fill a limited fetch's scan, so other keys' jobs behind it never started while workers sat free. Under a
