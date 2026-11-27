@@ -32,6 +32,14 @@ internal sealed class Producer(
     private readonly ConcurrentDictionary<long, DateTimeOffset> _pendingCancels = new();
     private volatile bool _paused;
 
+    // A database read of the pause applies only if no notification arrived while it ran and no read issued after it
+    // has applied, so neither a notification nor a reconnect's resync is undone by an older read.
+    private readonly Lock _pauseLock = new();
+    private int _pauseVersion;
+    private long _pauseReads;
+    private long _pauseReadApplied;
+    private int _resyncRequested;
+
     private readonly FetchLimits? _limits = FetchLimits.For(queueOptions);
 
     // When the queue's rate limit next allows a start, as of the last fetch; no fetch before then can start anything.
@@ -50,11 +58,23 @@ internal sealed class Producer(
 
     public void SetPaused(bool paused)
     {
-        _paused = paused;
+        lock (_pauseLock)
+        {
+            _pauseVersion++;
+            _paused = paused;
+        }
+
         if (!paused)
         {
             TriggerFetch();
         }
+    }
+
+    /// <summary>Re-reads the pause before the next fetch, for when notifications may have been missed.</summary>
+    public void Resync()
+    {
+        Volatile.Write(ref _resyncRequested, 1);
+        TriggerFetch();
     }
 
     public void CancelJob(long jobId)
@@ -78,11 +98,22 @@ internal sealed class Producer(
         }
     }
 
-    public async Task RunAsync(CancellationToken fetchToken, CancellationToken workToken)
+    // listening completes once pause notifications are being received. Reading the pause only after it means a pause
+    // committed around startup is either read or notified. It's waited for at most a settings poll, which catches a
+    // pause regardless.
+    public async Task RunAsync(Task listening, CancellationToken fetchToken, CancellationToken workToken)
     {
         try
         {
-            _paused = await ExecuteWithRetryAsync(UpsertQueueAsync, fetchToken).ConfigureAwait(false);
+            try
+            {
+                await listening.WaitAsync(SettingsPollInterval, fetchToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+            }
+
+            await ExecuteWithRetryAsync(ct => RefreshPausedAsync(UpsertQueueAsync, ct), fetchToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (fetchToken.IsCancellationRequested)
         {
@@ -92,9 +123,9 @@ internal sealed class Producer(
         using var pollSource = CancellationTokenSource.CreateLinkedTokenSource(fetchToken);
         var polls = Task.WhenAll(
             EveryAsync(runtime.Options.FetchPollInterval, _ => { TriggerFetch(); return Task.CompletedTask; }, pollSource.Token),
-            EveryAsync(SettingsPollInterval, PollSettingsAsync, pollSource.Token),
+            EveryAsync(SettingsPollInterval, ct => RefreshPausedAsync(ReadPausedAsync, ct), pollSource.Token),
             EveryAsync(CancelPollInterval, PollCancellationsAsync, pollSource.Token),
-            EveryAsync(QueueRefreshInterval, async ct => _paused = await UpsertQueueAsync(ct).ConfigureAwait(false), pollSource.Token));
+            EveryAsync(QueueRefreshInterval, ct => RefreshPausedAsync(UpsertQueueAsync, ct), pollSource.Token));
 
         using var rateTimer = _limits is { Rated: true }
             ? timeProvider.CreateTimer(_ => TriggerFetch(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan)
@@ -123,6 +154,22 @@ internal sealed class Producer(
                     if (sinceLastFetch < runtime.Options.FetchCooldown)
                     {
                         await Task.Delay(runtime.Options.FetchCooldown - sinceLastFetch, timeProvider, fetchToken).ConfigureAwait(false);
+                    }
+                }
+
+                if (Interlocked.Exchange(ref _resyncRequested, 0) == 1)
+                {
+                    try
+                    {
+                        await RefreshPausedAsync(ReadPausedAsync, fetchToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!fetchToken.IsCancellationRequested)
+                    {
+                        Volatile.Write(ref _resyncRequested, 1);
+                        Log.PollFailed(logger, ex, queue);
+                        await Backoff.DelayAsync(TimeSpan.FromSeconds(1), fetchToken).ConfigureAwait(false);
+                        TriggerFetch();
+                        continue;
                     }
                 }
 
@@ -411,17 +458,43 @@ internal sealed class Producer(
         }
     }
 
-    private async Task PollSettingsAsync(CancellationToken cancellationToken)
+    private async Task<bool> ReadPausedAsync(CancellationToken cancellationToken)
     {
         var command = runtime.DataSource.CreateCommand(runtime.Sql.QueueIsPaused);
         await using (command.ConfigureAwait(false))
         {
             command.Parameters.AddWithValue("name", queue);
-            var paused = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
-            if (paused != _paused)
+            return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+        }
+    }
+
+    private async Task RefreshPausedAsync(Func<CancellationToken, Task<bool>> read, CancellationToken cancellationToken)
+    {
+        int version;
+        long readId;
+        lock (_pauseLock)
+        {
+            version = _pauseVersion;
+            readId = ++_pauseReads;
+        }
+
+        var paused = await read(cancellationToken).ConfigureAwait(false);
+        bool resumed;
+        lock (_pauseLock)
+        {
+            if (version != _pauseVersion || readId < _pauseReadApplied)
             {
-                SetPaused(paused);
+                return;
             }
+
+            _pauseReadApplied = readId;
+            resumed = _paused && !paused;
+            _paused = paused;
+        }
+
+        if (resumed)
+        {
+            TriggerFetch();
         }
     }
 
@@ -482,13 +555,14 @@ internal sealed class Producer(
         }
     }
 
-    private async Task<T> ExecuteWithRetryAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken cancellationToken)
+    private async Task ExecuteWithRetryAsync(Func<CancellationToken, Task> work, CancellationToken cancellationToken)
     {
         for (var failures = 1; ; failures++)
         {
             try
             {
-                return await work(cancellationToken).ConfigureAwait(false);
+                await work(cancellationToken).ConfigureAwait(false);
+                return;
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
