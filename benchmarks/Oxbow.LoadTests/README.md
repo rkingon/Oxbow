@@ -142,6 +142,10 @@ All 18 steps drained. Of 11,340,000 offers, 11,240,044 were acknowledged and com
 
 ## Schema v3 release candidate
 
+**Eight-hour soak verdict for `3364be0`: failed admission and queue latency.** All 480 one-minute cohorts ran at a scheduled 1,200 offers/s. Of 34,560,000 scheduled offers, 33,975,981 were acknowledged and completed on the first attempt, 564,922 were skipped before dispatch, and 19,097 uncertain submissions were confirmed absent by ID. Every cohort met the 30-second drain deadline. The one-second p99 queue-wait gate failed in 65 cohorts, peaking at 29.630 s. The harness also recorded 63 cohorts with skipped offers and 10 with unacknowledged insert failures. These counts can overlap.
+
+At the final sample the job table occupied 131.08 MiB and indexes occupied 117.06 MiB. At matched volume near 9.1 million completions, table and indexes together occupied 249 MiB on this build and 1,517 MiB on `2c79ae9`. Across the full soak, all 65 latency misses and 564,104 of 564,922 skips occurred in minutes with at least one host CPU sample at or below 10% idle. The 248 other minutes had zero latency misses and 818 skips. All failures count toward qualification on this shared host.
+
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
 
 The eight-hour soak at 1,200 offers/s started at 13:45:54 UTC on November 27. The live test database reported schema version 3 and neither of the full JSON GIN indexes was present. The supervisor records table and individual index sizes each minute. The previous build’s last soak was superseded after 7 verified cohorts to prioritize this candidate. Its partial results are retained in `merged-2c79ae9`. Qualification of the two revisions is tracked separately.
