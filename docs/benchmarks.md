@@ -1,5 +1,7 @@
 # Benchmarks
 
+The [load-test suite](../benchmarks/Oxbow.LoadTests/README.md) exercises durable writes, multiple nodes, and recovery under live traffic.
+
 Run them with:
 
 ```shell

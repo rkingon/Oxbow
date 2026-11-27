@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <NoWarn>$(NoWarn);CA2007</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Oxbow/Oxbow.csproj" Condition="'$(OxbowPackageVersion)' == ''" />
+    <PackageReference Include="Oxbow" VersionOverride="[$(OxbowPackageVersion)]" Condition="'$(OxbowPackageVersion)' != ''" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Npgsql.DependencyInjection" />
+  </ItemGroup>
+</Project>
