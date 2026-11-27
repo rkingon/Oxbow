@@ -41,6 +41,53 @@ public sealed class LifecycleTests(PostgresFixture database)
     }
 
     [Fact]
+    public async Task A_pause_sent_while_the_listener_is_down_holds_once_it_reconnects()
+    {
+        var prefix = await database.CreateSchemaAsync();
+        await using var app = await TestApp.StartAsync(database, prefix, o => o.Queues["default"] = new QueueOptions(),
+            b => b.AddWorker<RecordArgs, RecordWorker>());
+
+        // The listener backs off a second after losing its connection; the pause lands inside that gap.
+        var listener = await WaitForListenerAsync(app, prefix, exceptPid: null);
+        await using (var kill = app.DataSource.CreateCommand("SELECT pg_terminate_backend(@pid)"))
+        {
+            kill.Parameters.AddWithValue("pid", listener);
+            await kill.ExecuteNonQueryAsync();
+        }
+
+        await app.Client.PauseQueueAsync("default");
+        await WaitForListenerAsync(app, prefix, exceptPid: listener);
+        await Task.Delay(300);
+
+        var result = await app.Client.InsertAsync(new RecordArgs("paused"));
+        await Task.Delay(1000);
+        Assert.Equal(JobState.Available, (await app.Client.GetAsync(result.Job.Id))!.State);
+
+        await app.Client.ResumeQueueAsync("default");
+        await app.WaitForStateAsync(result.Job.Id, JobState.Completed);
+    }
+
+    private static async Task<int> WaitForListenerAsync(TestApp app, string prefix, int? exceptPid)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        while (true)
+        {
+            await using var command = app.DataSource.CreateCommand("""
+                SELECT pid FROM pg_stat_activity
+                WHERE query LIKE 'LISTEN %' AND query LIKE '%' || @prefix || '%' AND pid <> @except
+                """);
+            command.Parameters.AddWithValue("prefix", prefix);
+            command.Parameters.AddWithValue("except", exceptPid ?? 0);
+            if (await command.ExecuteScalarAsync(cts.Token) is int pid)
+            {
+                return pid;
+            }
+
+            await Task.Delay(20, cts.Token);
+        }
+    }
+
+    [Fact]
     public async Task Retry_delete_and_list_follow_river_semantics()
     {
         var prefix = await database.CreateSchemaAsync();

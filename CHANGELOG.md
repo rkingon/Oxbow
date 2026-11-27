@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A queue paused while a node's listener wasn't connected (as the node started, or while it reconnected) no longer
+  keeps starting jobs on that node for up to 30 seconds. Nodes now read the pause only once they're listening, re-read
+  it on every reconnect, and a pause notification is no longer overwritten by a database read that started before it.
+
 ## [0.2.0-alpha.5] - 2026-11-27
 
 Steps and attempt locks for long-running jobs, and schema version 3. **Upgrade the schema before deploying:** apply

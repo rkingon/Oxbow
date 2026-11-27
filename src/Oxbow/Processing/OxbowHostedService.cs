@@ -30,6 +30,7 @@ internal sealed class OxbowHostedService(
     private readonly CancellationTokenSource _notifierSource = new();
     private readonly Dictionary<string, Producer> _producers = new(StringComparer.Ordinal);
     private readonly List<Task> _loops = [];
+    private readonly TaskCompletionSource _listening = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Bounded and lossy: a dropped signal waits for the leader's sweep.
     private readonly Channel<string> _signalledSequences = Channel.CreateBounded<string>(
@@ -78,17 +79,22 @@ internal sealed class OxbowHostedService(
             notifier.Subscribe(runtime.Sql.SequenceChannel, OnSequenceNotification);
             notifier.Connected += () =>
             {
+                _listening.TrySetResult();
                 foreach (var producer in _producers.Values)
                 {
-                    producer.TriggerFetch();
+                    producer.Resync();
                 }
             };
             _notifierLoop = Task.Run(() => notifier.RunAsync(_notifierSource.Token), CancellationToken.None);
         }
+        else
+        {
+            _listening.TrySetResult();
+        }
 
         foreach (var producer in _producers.Values)
         {
-            _loops.Add(Task.Run(() => producer.RunAsync(_fetchSource.Token, _workSource.Token), CancellationToken.None));
+            _loops.Add(Task.Run(() => producer.RunAsync(_listening.Task, _fetchSource.Token, _workSource.Token), CancellationToken.None));
         }
 
         _loops.Add(Task.Run(() => Elector.RunAsync(maintenance.RunAsync, _fetchSource.Token), CancellationToken.None));

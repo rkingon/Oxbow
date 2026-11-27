@@ -30,4 +30,5 @@ await oxbow.ResumeQueueAsync("email");
 ```
 
 Pausing applies to every node: running jobs finish, no new ones start. It's stored in `{prefix}queue`, so a paused
-queue stays paused across restarts and on nodes that start later.
+queue stays paused across restarts and on nodes that start later. Nodes learn of a pause by notification; one whose
+listener connection is down catches up when it reconnects, or within 30 seconds by polling (2 with `PollOnly`).
