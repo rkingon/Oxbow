@@ -144,3 +144,10 @@ static Oxbow.Testing.RecordedProgress.operator !=(Oxbow.Testing.RecordedProgress
 static Oxbow.Testing.RecordedProgress.operator ==(Oxbow.Testing.RecordedProgress? left, Oxbow.Testing.RecordedProgress? right) -> bool
 Oxbow.Testing.WorkResult.RetryDelay.get -> System.TimeSpan?
 Oxbow.Testing.WorkResult.RetryDelay.init -> void
+Oxbow.Testing.RecordingJobRuntime.AttemptLocks.get -> int
+Oxbow.Testing.RecordingJobRuntime.JsonSerializerOptions.get -> System.Text.Json.JsonSerializerOptions!
+Oxbow.Testing.RecordingJobRuntime.JsonSerializerOptions.init -> void
+Oxbow.Testing.RecordingJobRuntime.LockAttemptAsync(System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.Testing.RecordingJobRuntime.RecordStep<T>(string! name, T result) -> void
+Oxbow.Testing.RecordingJobRuntime.StepAsync<T>(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>!>! run, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<T>!
+Oxbow.Testing.RecordingJobRuntime.Steps.get -> System.Collections.Generic.IReadOnlyDictionary<string!, System.Text.Json.JsonElement>!

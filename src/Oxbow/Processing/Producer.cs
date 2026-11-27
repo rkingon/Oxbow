@@ -159,8 +159,7 @@ internal sealed class Producer(
                     Start(row, workToken);
                 }
 
-                // A short limited fetch may have dropped jobs of keys that had room for only some of them; with those
-                // keys now full, the next fetch scans past them.
+                // A short limited fetch may have skipped jobs another transaction held locked.
                 if (_limits is not null && jobs.Count > 0 && jobs.Count < slots)
                 {
                     TriggerFetch();
@@ -323,8 +322,8 @@ internal sealed class Producer(
     }
 
     /// <summary>
-    /// Adds the queue lock (with a global or rate limit), the limited fetch and, with a rate limit, the wait query to
-    /// <paramref name="batch"/>, and runs it.
+    /// Adds the JIT opt-out, the queue lock (with a global or rate limit), the limited fetch and, with a rate limit, the
+    /// wait query to <paramref name="batch"/>, and runs it.
     /// </summary>
     internal static async Task<LimitedFetch> FetchLimitedAsync(
         NpgsqlBatch batch,
@@ -337,6 +336,7 @@ internal sealed class Producer(
         int[] localRunning,
         CancellationToken cancellationToken)
     {
+        batch.BatchCommands.Add(new NpgsqlBatchCommand(sql.FetchWithoutJit));
         if (limits.Serialized)
         {
             var queueLock = new NpgsqlBatchCommand(sql.QueueLock);
@@ -370,6 +370,7 @@ internal sealed class Producer(
         var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         await using (reader.ConfigureAwait(false))
         {
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 rows.Add(JobRowReader.Read(reader));

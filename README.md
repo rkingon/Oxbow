@@ -19,7 +19,8 @@ A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverq
 - Concurrency limits per key (per customer, per tenant), on each node and across the fleet
 - Rate limits on job starts, per queue or per key, held across the fleet without spending attempts
 - LISTEN/NOTIFY wake-ups with polling fallback; `FOR UPDATE SKIP LOCKED` fetching
-- Heartbeat and progress for long-running jobs
+- Long-running jobs: heartbeat and progress, steps that resume where they left off, and writes fenced to the current
+  attempt
 - Leader-elected maintenance: scheduler, stuck-job rescuer, cleaner
 - Insert and work middleware, OpenTelemetry-ready `ActivitySource` and `Meter`
 - Args encryption at rest, per kind or for all, on ASP.NET Core Data Protection

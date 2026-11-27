@@ -82,4 +82,14 @@ internal static partial class Log
 
     [LoggerMessage(73, LogLevel.Warning, "A discard handler's cancellation callback threw.")]
     public static partial void DiscardCancelCallbackFailed(ILogger logger, Exception exception);
+
+    // 80–89: steps and attempt locks.
+    [LoggerMessage(80, LogLevel.Warning, "Job {JobId}'s worker returned while its row is still locked, likely by a LockAttemptAsync transaction it didn't end; its outcome waits for the lock.")]
+    public static partial void AttemptLockHeld(ILogger logger, long jobId);
+
+    [LoggerMessage(81, LogLevel.Warning, "Checking whether job {JobId}'s row is still locked failed; checking again.")]
+    public static partial void AttemptLockProbeFailed(ILogger logger, Exception exception, long jobId);
+
+    [LoggerMessage(82, LogLevel.Warning, "Job {JobId}'s row was still locked at shutdown, so its outcome isn't written; the rescuer will pick it up.")]
+    public static partial void AttemptOutcomeLeftForRescue(ILogger logger, long jobId);
 }

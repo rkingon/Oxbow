@@ -75,6 +75,7 @@ internal sealed class JobExecutor(
         string? output = null;
         var timeout = runtime.Options.JobTimeout;
         CancellationTokenSource? timeoutSource = null;
+        JobControl? control = null;
         try
         {
             var registration = workers.Find(row.Kind);
@@ -86,8 +87,8 @@ internal sealed class JobExecutor(
 
             scope = scopes.CreateAsyncScope();
             var services = scope.Value.ServiceProvider;
-            unit = registration.CreateUnit(
-                row, services, runtime.Json, runtime.ArgsProtector, new JobControl(runtime, row, timeProvider));
+            control = new JobControl(runtime, row, timeProvider);
+            unit = registration.CreateUnit(row, services, runtime.Json, runtime.ArgsProtector, control);
             timeout = unit.GetTimeout() ?? timeout;
             timeoutSource = timeout > TimeSpan.Zero && !OxbowRuntime.IsInfinite(timeout)
                 ? new CancellationTokenSource(timeout, timeProvider)
@@ -149,6 +150,12 @@ internal sealed class JobExecutor(
                     workerRetry = null;
                 }
             }
+        }
+
+        if (control is not null && !await control.WaitForAttemptLockAsync(logger, workToken).ConfigureAwait(false))
+        {
+            // Queuing the outcome would hold the completer's batch on the lock; the row stays running for the rescuer.
+            return;
         }
 
         var now = timeProvider.GetUtcNow();

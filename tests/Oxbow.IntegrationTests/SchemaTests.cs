@@ -101,6 +101,72 @@ public sealed class SchemaTests(PostgresFixture database)
     }
 
     [Fact]
+    public async Task No_job_index_is_a_GIN()
+    {
+        // A GIN keeps an entry for every distinct value ever indexed, so one over per-job values grows without bound.
+        Assert.Equal("", await GinIndexesAsync(await database.CreateSchemaAsync()));
+    }
+
+    [Fact]
+    public async Task Version_3_upgrades_and_rolls_back_with_jobs_in_place()
+    {
+        const string prefix = "v3data_";
+        await MigrateAsync(prefix, 0, 2);
+        await database.ExecuteAsOwnerAsync($"""
+            INSERT INTO public.{prefix}job (args, kind, metadata, state, finalized_at)
+            SELECT jsonb_build_object('n', i), 'k', jsonb_build_object('tenant', 't' || i % 3, 'output', i),
+                   CASE WHEN i % 2 = 0 THEN 'completed' ELSE 'available' END::public.{prefix}job_state,
+                   CASE WHEN i % 2 = 0 THEN now() END
+            FROM generate_series(1, 300) i
+            """);
+        var jobs = await FingerprintAsync(prefix);
+
+        await MigrateAsync(prefix, 2, 3);
+        Assert.Equal("", await GinIndexesAsync(prefix));
+        Assert.Equal(jobs, await FingerprintAsync(prefix));
+        await database.ExecuteAsOwnerAsync($"""
+            INSERT INTO public.{prefix}job_step (job_id, name, output)
+            SELECT id, 'step', jsonb_build_object('n', id) FROM public.{prefix}job
+            """);
+        Assert.Equal(100L, await database.ScalarAsOwnerAsync<long>(
+            $$"""SELECT count(*) FROM public.{{prefix}}job WHERE metadata @> '{"tenant": "t1"}'"""));
+
+        await MigrateAsync(prefix, 3, 2);
+        Assert.Equal($"{prefix}job_args_idx:valid,{prefix}job_metadata_idx:valid", await GinIndexesAsync(prefix));
+        Assert.Equal(jobs, await FingerprintAsync(prefix));
+        Assert.Equal(2, await MarkerAsync(prefix));
+
+        await MigrateAsync(prefix, 2, 3);
+        Assert.Equal("", await GinIndexesAsync(prefix));
+        Assert.Equal(jobs, await FingerprintAsync(prefix));
+
+        await MigrateAsync(prefix, 3, 0);
+    }
+
+    private async Task MigrateAsync(string prefix, int from, int to)
+    {
+        foreach (var migration in OxbowSchema.GetMigrations(from, to, tablePrefix: prefix))
+        {
+            await database.ExecuteAsOwnerAsync(migration.Sql);
+        }
+    }
+
+    private async Task<string?> FingerprintAsync(string prefix) =>
+        await database.ScalarAsOwnerAsync<string>($"""
+            SELECT count(*) || ':' || sum(hashtext(id || state::text || args::text || metadata::text))
+            FROM public.{prefix}job
+            """);
+
+    private async Task<string?> GinIndexesAsync(string prefix) =>
+        await database.ScalarAsOwnerAsync<string>($"""
+            SELECT coalesce(string_agg(i.relname || CASE WHEN x.indisvalid THEN ':valid' ELSE ':invalid' END, ',' ORDER BY i.relname), '')
+            FROM pg_index x
+            JOIN pg_class i ON i.oid = x.indexrelid
+            JOIN pg_am am ON am.oid = i.relam
+            WHERE x.indrelid = 'public.{prefix}job'::regclass AND am.amname = 'gin'
+            """);
+
+    [Fact]
     public async Task Start_fails_with_instructions_when_the_schema_is_missing()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>

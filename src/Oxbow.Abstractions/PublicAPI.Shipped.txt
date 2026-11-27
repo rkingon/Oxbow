@@ -409,3 +409,11 @@ Oxbow.JobRetryException
 Oxbow.JobRetryException.Delay.get -> System.TimeSpan
 Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message) -> void
 Oxbow.JobRetryException.JobRetryException(System.TimeSpan delay, string! message, System.Exception! innerException) -> void
+Oxbow.IJobRuntime.LockAttemptAsync(System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Oxbow.IJobRuntime.StepAsync<T>(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>!>! run, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<T>!
+Oxbow.Job<TArgs>.LockAttemptAsync(System.Data.Common.DbTransaction! transaction, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Job<TArgs>.StepAsync(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task!>! run, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Oxbow.Job<TArgs>.StepAsync<T>(string! name, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>!>! run, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T>!
+Oxbow.JobAttemptSupersededException
+Oxbow.JobAttemptSupersededException.JobAttemptSupersededException(long jobId) -> void
+Oxbow.JobAttemptSupersededException.JobId.get -> long

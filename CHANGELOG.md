@@ -3,6 +3,64 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0-alpha.5] - 2026-11-27
+
+Steps and attempt locks for long-running jobs, and schema version 3. **Upgrade the schema before deploying:** apply
+`OxbowSchema.GetMigrations(2, 3)` (or `AddOxbowSchema(version: 3)`, or `oxbow migrate`) and grant
+`GetGrants(role, version: 3)`. Nodes on 0.2.0-alpha.4 keep working against version 3, so they can be rolled after it.
+
+### Added
+
+- Steps: `job.StepAsync(name, run)` records a step's result, and later executions of the job (after a failed attempt,
+  a snooze, a rescue, a shutdown or `RetryAsync`) return it instead of running the step again, so a long job resumes
+  where it was. At least once; the first result recorded wins; a known-superseded attempt can't run or replay a step;
+  results of jobs with encrypted args are encrypted; kept with their job and deleted with it. Schema version 3 adds
+  `oxbow_job_step`. See [docs/long-running-jobs.md](docs/long-running-jobs.md).
+- `job.LockAttemptAsync(transaction)` locks the job's row in your transaction while this attempt is the one running,
+  so your writes commit only as the current attempt's. Once the rescuer has taken the job, it fails the transaction and
+  throws `JobAttemptSupersededException`. A worker that returns with the lock still held holds only its own outcome,
+  or at shutdown leaves the job to the rescuer.
+- `IJobArgsProtector.ProtectStepResult` and `UnprotectStepResult`, implemented by `Oxbow.DataProtection` under a purpose
+  apart from args. A custom protector that doesn't implement them fails steps of encrypted kinds.
+- `RecordingJobRuntime` in `Oxbow.Testing` records steps (`Steps`, seeded with `RecordStep`) and counts
+  `AttemptLocks`. `IJobRuntime` gains `StepAsync` and `LockAttemptAsync`; runtimes that don't implement them throw
+  `NotSupportedException` rather than skipping them.
+
+### Changed
+
+- Heartbeats and progress are skipped while the job's row is locked, rather than waiting for the lock, so a worker
+  inside its own `LockAttemptAsync` transaction can't deadlock on them. A skipped heartbeat doesn't count toward the
+  throttle.
+- The rescuer skips a running job whose row is locked and takes it on a later pass, rather than waiting with its whole
+  batch.
+
+### Fixed
+
+- Schema version 3 drops the GIN indexes on `oxbow_job.args` and `oxbow_job.metadata`. A GIN index keeps an entry for
+  every distinct value it has ever indexed, so with per-job values (IDs in args; the output and heartbeat times Oxbow
+  writes to metadata) each grew with every job inserted, not with the jobs kept, and only a `REINDEX` reclaimed them.
+  At 1,200 jobs/s with five-minute retention they reached 204 MB and 166 MB in 38 minutes over about 370,000 live
+  rows. `JobFilter.Metadata` is no longer index-assisted: narrow it with `States`, `Queues` or `Kinds`, or add your own
+  index and own its `REINDEX`.
+- A partition key with a deep backlog and some room left under its `ConcurrencyLimit` or `PartitionRateLimit` could
+  fill a limited fetch's scan, so other keys' jobs behind it never started while workers sat free. Under a
+  `PartitionRateLimit` the key's allowance refills between fetches, so this could last as long as its backlog. The
+  fetch now scans on past keys that have had their room until it's full or the queue ends.
+- Limited fetches turn off JIT for their transaction.
+
+## [0.2.0-alpha.4] - 2026-11-26
+
+Attempt-fenced completions. No schema change.
+
+### Fixed
+
+- A worker that finishes after rescue can no longer complete a replacement attempt or overwrite its output. Batched
+  completions acknowledge only the attempt whose update was applied.
+- Oxbow calls `GetNextRetry` while the worker and its scoped dependencies are alive. If the callback throws, execution
+  and rescue use the configured retry policy, and a failed worker attempt retains its original error.
+- A soft stop during worker scope disposal returns a cancelled attempt to the queue and refunds the attempt, including
+  on the final attempt.
+
 ## [0.2.0-alpha.3] - 2026-11-26
 
 Worker-chosen retry delays. No schema change.

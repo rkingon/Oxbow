@@ -48,6 +48,24 @@ public sealed class JobRetryException : Exception
     public TimeSpan Delay { get; }
 }
 
+/// <summary>
+/// Thrown to a worker whose attempt is no longer the job's running one: the rescuer took the job, or it was finished
+/// or deleted. Let it propagate: Oxbow ignores the attempt's heartbeats, progress and outcome from here on.
+/// </summary>
+public sealed class JobAttemptSupersededException : Exception
+{
+    /// <summary>Reports that job <paramref name="jobId"/>'s attempt was superseded.</summary>
+    /// <param name="jobId">The job's ID.</param>
+    public JobAttemptSupersededException(long jobId)
+        : base($"Job {jobId} is no longer running this attempt: it was rescued, finished or deleted.")
+    {
+        JobId = jobId;
+    }
+
+    /// <summary>The job's ID.</summary>
+    public long JobId { get; }
+}
+
 /// <summary>Thrown by a worker to cancel its job permanently. The error is recorded and the job isn't retried.</summary>
 public sealed class JobCancelException : Exception
 {

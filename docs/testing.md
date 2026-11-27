@@ -64,5 +64,8 @@ await worker.WorkAsync(new Job<Import>(row, new Import(10), runtime), Cancellati
 Assert.Equal([50.0, 100.0], runtime.Progress.Select(p => p.Percent));
 ```
 
+It records steps too, in `runtime.Steps`, and `runtime.RecordStep(name, result)` seeds one to test a replay. See
+[long-running jobs](long-running-jobs.md#testing).
+
 For full integration tests, run Postgres in a container (Testcontainers), apply `OxbowSchema.GetMigrations(0)`, and use a
 unique `TablePrefix` per test to isolate them, as Oxbow's own suite does.

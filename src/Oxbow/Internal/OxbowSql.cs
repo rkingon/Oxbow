@@ -17,6 +17,7 @@ internal sealed class OxbowSql
         var periodic = $"{schema}.{prefix}periodic_job";
         var batch = $"{schema}.{prefix}batch";
         var rateLimit = $"{schema}.{prefix}rate_limit";
+        var step = $"{schema}.{prefix}job_step";
 
         InsertChannel = $"{schema}.{prefix}insert";
         ControlChannel = $"{schema}.{prefix}control";
@@ -102,8 +103,7 @@ internal sealed class OxbowSql
 
         // GetAvailable for a queue with a concurrency or rate limit. A key's room is the least of the global limit minus
         // its running jobs, the local limit minus this node's (sent by the producer), and the starts its rate limit
-        // allows. Keys without room are filtered out before the scan's LIMIT, so a saturated key's backlog can't starve
-        // the others; the window then keeps at most `room` jobs per key, and the queue's rate limit caps the total.
+        // allows. A fetch takes at most `room` jobs per key, and the queue's rate limit caps the total.
         //
         // Rate limits are GCRA, run under the queue lock: with emission interval T and burst b, a limiter whose
         // theoretical arrival time is tat allows b - ceil((tat - t) / T) starts (tat no earlier than t), and each start
@@ -111,7 +111,7 @@ internal sealed class OxbowSql
         // takes after QueueLock returns; now() is the transaction's start, before the wait for the lock, so a fetch
         // that waited would judge itself by a time earlier than the previous holder's starts.
         GetAvailableLimited = $"""
-            WITH queue_rate AS (
+            WITH RECURSIVE queue_rate AS (
                 SELECT greatest(q.rate_limit_tat, statement_timestamp()) AS tat0
                 FROM {queue} AS q
                 WHERE @rate_interval::bigint IS NOT NULL
@@ -155,37 +155,61 @@ internal sealed class OxbowSql
                 FULL JOIN local_running AS l USING (partition_key)
                 FULL JOIN key_rate AS k USING (partition_key)
             ),
-            candidates AS (
-                SELECT id, partition_key, priority, scheduled_at
-                FROM {job}
-                WHERE state = 'available'
-                  AND queue = @queue
-                  AND scheduled_at <= now()
-                  AND (partition_key IS NULL
-                       OR partition_key <> ALL (ARRAY(SELECT partition_key FROM room WHERE room <= 0)))
-                ORDER BY priority, scheduled_at, id
-                LIMIT @scan
-            ),
-            ranked AS (
-                SELECT id, partition_key, priority, scheduled_at,
-                    row_number() OVER (PARTITION BY partition_key ORDER BY priority, scheduled_at, id) AS rank
-                FROM candidates
-            ),
-            eligible AS (
-                SELECT ranked.id, ranked.priority, ranked.scheduled_at
-                FROM ranked
-                LEFT JOIN room USING (partition_key)
-                WHERE ranked.partition_key IS NULL
-                   OR ranked.rank <= coalesce(
-                       room.room, least(@global_limit::int, @local_limit::int, @key_rate_burst::int), @max::int)
+            -- Walks the queue in order, @scan jobs a round, each round picking up where the last stopped and skipping
+            -- keys that have used their room, until it has enough jobs or reaches the end. So a deep backlog with a
+            -- little room left can't fill the scan ahead of every other key, and no round rescans what an earlier one
+            -- passed. A key's rank counts its jobs taken in earlier rounds. Each full round takes at least one job (the
+            -- first of each key in it), so there are at most @max + 1.
+            scans (skip, ids, keys, after_priority, after_scheduled_at, after_id, done) AS (
+                SELECT ARRAY(SELECT partition_key FROM room WHERE room <= 0), ARRAY[]::bigint[], ARRAY[]::text[],
+                    0::smallint, '-infinity'::timestamptz, 0::bigint, (SELECT n FROM allowed) = 0
+                UNION ALL
+                SELECT s.skip || w.full_keys, s.ids || w.ids, s.keys || w.keys,
+                    w.last_priority, w.last_scheduled_at, w.last_id,
+                    w.scanned < @scan OR cardinality(s.ids) + cardinality(w.ids) >= (SELECT n FROM allowed)
+                FROM scans AS s
+                CROSS JOIN LATERAL (
+                    SELECT count(*) AS scanned,
+                        min(priority) FILTER (WHERE last) AS last_priority,
+                        min(scheduled_at) FILTER (WHERE last) AS last_scheduled_at,
+                        min(id) FILTER (WHERE last) AS last_id,
+                        coalesce(array_agg(id) FILTER (WHERE fits), ARRAY[]::bigint[]) AS ids,
+                        coalesce(array_agg(partition_key) FILTER (WHERE fits), ARRAY[]::text[]) AS keys,
+                        coalesce(array_agg(DISTINCT partition_key) FILTER (WHERE partition_key IS NOT NULL AND total >= cap),
+                            ARRAY[]::text[]) AS full_keys
+                    FROM (
+                        SELECT c.id, c.partition_key, c.priority, c.scheduled_at,
+                            row_number() OVER (ORDER BY c.priority DESC, c.scheduled_at DESC, c.id DESC) = 1 AS last,
+                            c.partition_key IS NULL OR coalesce(t.n, 0)
+                                + row_number() OVER (PARTITION BY c.partition_key ORDER BY c.priority, c.scheduled_at, c.id) <= cap.n AS fits,
+                            coalesce(t.n, 0) + count(*) OVER (PARTITION BY c.partition_key) AS total,
+                            cap.n AS cap
+                        FROM (
+                            SELECT id, partition_key, priority, scheduled_at
+                            FROM {job}
+                            WHERE state = 'available'
+                              AND queue = @queue
+                              AND (priority, scheduled_at, id) > (s.after_priority, s.after_scheduled_at, s.after_id)
+                              AND scheduled_at <= now()
+                              AND (partition_key IS NULL OR partition_key <> ALL (s.skip))
+                            ORDER BY priority, scheduled_at, id
+                            LIMIT @scan
+                        ) AS c
+                        LEFT JOIN room USING (partition_key)
+                        LEFT JOIN (SELECT k, count(*) AS n FROM unnest(s.keys) AS k GROUP BY k) AS t ON t.k = c.partition_key
+                        CROSS JOIN LATERAL (SELECT coalesce(room.room,
+                            least(@global_limit::int, @local_limit::int, @key_rate_burst::int), @max::int) AS n) AS cap
+                    ) AS ranked
+                ) AS w
+                WHERE NOT s.done
             ),
             -- LIMIT after SKIP LOCKED, so a row someone else holds doesn't use up a slot.
             locked AS (
                 SELECT j.id
                 FROM {job} AS j
-                JOIN eligible AS e ON e.id = j.id
-                WHERE j.state = 'available'
-                ORDER BY e.priority, e.scheduled_at, e.id
+                WHERE j.id = ANY ((SELECT ids FROM scans WHERE done)::bigint[])
+                  AND j.state = 'available'
+                ORDER BY j.priority, j.scheduled_at, j.id
                 LIMIT (SELECT n FROM allowed)
                 FOR UPDATE OF j SKIP LOCKED
             ),
@@ -224,6 +248,10 @@ internal sealed class OxbowSql
             )
             SELECT * FROM fetched
             """;
+
+        // Leads the limited fetch's batch. Its scan is recursive, which the planner costs at ten rounds, enough to JIT
+        // compile a fetch of a long queue on every call; compiling costs more than any fetch saves.
+        FetchWithoutJit = "SELECT set_config('jit', 'off', true)";
 
         // Run after GetAvailableLimited in its transaction: seconds until the queue's limiter next allows a start, and
         // until the first throttled key's does; NULL or negative when there's nothing to wait for. Relative to the
@@ -582,7 +610,16 @@ internal sealed class OxbowSql
             LIMIT @max
             """;
 
+        // A row locked by its attempt's LockAttemptAsync transaction is left for a later pass rather than holding up the
+        // batch until that transaction ends.
         RescueMany = $"""
+            WITH locked AS (
+                SELECT id FROM {job} AS l
+                WHERE id = ANY(@id::bigint[])
+                  AND state = 'running'
+                  AND {LastSeen("l")} < @stuck_horizon
+                FOR NO KEY UPDATE SKIP LOCKED
+            )
             UPDATE {job} AS j
             SET
                 errors = array_append(j.errors, r.error::jsonb),
@@ -595,19 +632,24 @@ internal sealed class OxbowSql
                 state = r.state::{state}
             FROM unnest(@id::bigint[], @error::text[], @finalized_at::timestamptz[], @scheduled_at::timestamptz[], @state::text[])
                 AS r(id, error, finalized_at, scheduled_at, state)
+            JOIN locked ON locked.id = r.id
             WHERE j.id = r.id
-              AND j.state = 'running'
-              AND {LastSeen("j")} < @stuck_horizon
             RETURNING {Columns("j")}
             """;
 
-        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing.
+        // The attempted_at guard keeps a finished, rescued or refetched attempt from writing. A locked row is skipped:
+        // the lock may be the attempt's own LockAttemptAsync, held by the worker that's waiting on this write.
+        var currentAttemptUnlessLocked = $"""
+            id = (
+                SELECT id FROM {job}
+                WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at
+                FOR NO KEY UPDATE SKIP LOCKED)
+            """;
+
         Heartbeat = $"""
             UPDATE {job}
             SET metadata = metadata || jsonb_build_object('oxbow:heartbeat_at', now())
-            WHERE id = @id
-              AND state = 'running'
-              AND attempted_at = @attempted_at
+            WHERE {currentAttemptUnlessLocked}
             """;
 
         ReportProgress = $"""
@@ -616,10 +658,43 @@ internal sealed class OxbowSql
                 'oxbow:heartbeat_at', now(),
                 'oxbow:progress', jsonb_build_object(
                     'percent', @percent::float8, 'message', @message::text, 'attempt', attempt, 'at', now()))
-            WHERE id = @id
-              AND state = 'running'
-              AND attempted_at = @attempted_at
+            WHERE {currentAttemptUnlessLocked}
             """;
+
+        var isCurrentAttempt = $"SELECT 1 FROM {job} WHERE id = @id AND state = 'running' AND attempted_at = @attempted_at";
+
+        // FOR SHARE conflicts with the FOR NO KEY UPDATE the rescuer's and the completer's updates take, so they wait for
+        // the caller's transaction, but not with the attempt's other transactions holding it too. With no current attempt
+        // it divides by zero, failing the caller's transaction so nothing it wrote can commit.
+        LockAttempt = $"SELECT 1 / count(*) FROM ({isCurrentAttempt} FOR SHARE) AS current_attempt";
+
+        // Whether something other than this check holds the job's row: after its worker returns, an attempt whose lock is
+        // still held would make the completer's batch wait.
+        AttemptLockHeld = $"""
+            SELECT EXISTS (SELECT 1 FROM {job} WHERE id = @id)
+               AND NOT EXISTS (SELECT 1 FROM {job} WHERE id = @id FOR NO KEY UPDATE SKIP LOCKED)
+            """;
+
+        StepGet = $"""
+            SELECT
+                (SELECT output::text FROM {step} WHERE job_id = @id AND name = @name),
+                EXISTS ({isCurrentAttempt})
+            """;
+
+        // Recording runs as one batch, so in one transaction. The FOR SHARE makes the current-attempt check hold until
+        // the result is in: the rescuer can't take the job in between. The insert runs whether or not the attempt is
+        // current, since a step already in flight when the job was rescued did run, and the first result recorded wins.
+        // The last statement takes a fresh snapshot, so it reads the winner even if it committed while the insert waited.
+        StepRecordLock = $"{isCurrentAttempt} FOR SHARE";
+
+        StepRecordInsert = $"""
+            INSERT INTO {step} (job_id, name, output)
+            VALUES (@id, @name, @output::jsonb)
+            ON CONFLICT (job_id, name) DO NOTHING
+            RETURNING true
+            """;
+
+        StepRecordRead = $"SELECT output::text FROM {step} WHERE job_id = @id AND name = @name";
 
         DeleteFinalized = $"""
             DELETE FROM {job}
@@ -1058,6 +1133,8 @@ internal sealed class OxbowSql
 
     public string GetAvailableLimited { get; }
 
+    public string FetchWithoutJit { get; }
+
     public string RateLimitWait { get; }
 
     public string RateLimitDeleteExpired { get; }
@@ -1104,6 +1181,18 @@ internal sealed class OxbowSql
     public string Heartbeat { get; }
 
     public string ReportProgress { get; }
+
+    public string LockAttempt { get; }
+
+    public string AttemptLockHeld { get; }
+
+    public string StepGet { get; }
+
+    public string StepRecordLock { get; }
+
+    public string StepRecordInsert { get; }
+
+    public string StepRecordRead { get; }
 
     public string DeleteFinalized { get; }
 

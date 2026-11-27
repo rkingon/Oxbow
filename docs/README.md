@@ -4,6 +4,7 @@
 - [Abstractions and layering](abstractions.md): own jobs in projects without Npgsql; enqueue in the unit of work
 - [Migrations](migrations.md) and [least privilege](least-privilege.md)
 - [Workers](workers.md): timeouts, snooze, self-cancel, error handling
+- [Long-running jobs](long-running-jobs.md): steps that resume, heartbeats, and writes fenced to the current attempt
 - [Retries](retries.md)
 - [Discard handlers](discard-handlers.md): react when a job is discarded or cancelled
 - [Managing jobs](managing-jobs.md): list filters, bulk cancel, retry and delete
