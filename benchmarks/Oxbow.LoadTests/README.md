@@ -110,6 +110,8 @@ The investigator reproduced cumulative GIN growth on PostgreSQL 17 with 60,000 r
 
 For subsequent soak retries, the controller records a missed 30-second cohort drain as a failed gate and allows another 90 seconds for per-ID reconciliation. The next producer starts on the minute schedule while verification runs. The first eight-hour attempt used controller `16d56d9`. A fresh 480-minute attempt using `165baa4` started at 11:22 UTC after capacity and the 30-minute retry, with the same packaged binaries and 1,200 offers/s target.
 
+The second attempt exposed a producer error path during a database connection timeout. Harness revision `62fc69f` records a directly thrown `TimeoutException` as an uncertain insert, just as it does for an Npgsql-wrapped timeout. A targeted check injected two timeouts and verified that the producer emitted receipts covering all 100 offers. The eight-hour profile `overnight-receipt-retry` uses this harness and the same byte-verified Oxbow and Oxbow.Abstractions dev-package DLLs. Its results are recorded separately.
+
 ### Five-minute capacity sweep
 
 Each step offered work for 300 seconds. Batched inserts and COPY used groups of 50. The handler delay was 50 ms for batched inserts and 0 ms for single inserts and COPY. Host idle is the median across host samples taken during producer sampling.
