@@ -5,7 +5,7 @@ namespace Oxbow.Internal;
 
 /// <summary>
 /// Renders a <see cref="JobFilter"/> as a WHERE clause holding only the filters that are set, so the planner sees
-/// plain predicates it can match to indexes (the metadata GIN index in particular) rather than <c>@x IS NULL OR …</c>.
+/// plain predicates it can match to indexes rather than <c>@x IS NULL OR …</c>.
 /// </summary>
 internal static class JobFilterSql
 {

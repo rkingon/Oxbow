@@ -72,7 +72,6 @@ CREATE TABLE {s}.{p}job (
 -- {p}job_kind_idx              (kind)
 -- {p}job_finalized_idx         (state, finalized_at) WHERE finalized_at IS NOT NULL
 -- {p}job_fetch_idx             (state, queue, priority, scheduled_at, id)
--- {p}job_metadata_idx          GIN(metadata)
 -- {p}job_unique_idx            UNIQUE (unique_key) WHERE unique_key IS NOT NULL AND unique_states IS NOT NULL
 --                                AND {p}job_state_in_bitmask(unique_states, state)
 CREATE FUNCTION {s}.{p}job_state_in_bitmask(bit(8), {s}.{p}job_state) RETURNS boolean IMMUTABLE ...;
@@ -86,9 +85,11 @@ Version 2 adds, for [batches](batches.md), `{p}batch` (counts, prepared callback
 unfinished and finished rows) and a nullable `{p}job.batch_id` with `{p}job_batch_idx (batch_id, state) WHERE batch_id
 IS NOT NULL`, which serves both the finisher's "any live member?" probe and the progress aggregate.
 
-Version 3 drops `{p}job_args_idx`. A GIN index never removes an entry once a key has been indexed (vacuum only empties
-its posting list), so an index over values that differ per job, such as IDs in args, grows with every job ever inserted
-rather than with the jobs kept, until a `REINDEX`. Nothing in Oxbow queries args by containment.
+Version 3 drops `{p}job_args_idx` and `{p}job_metadata_idx`. A GIN index never removes an entry once a key has been
+indexed (vacuum only empties its posting list), so an index over values that differ per job, such as IDs in args or the
+output and heartbeat times Oxbow writes to metadata, grows with every job ever inserted rather than with the jobs kept,
+until a `REINDEX`. Nothing in Oxbow queries args by containment, and a `JobFilter.Metadata` filter scans only the
+retained rows.
 
 The `{p}migration` table is a version marker that each script writes to. Nothing reads it as a migration runner. At
 startup the client checks `max(version)` against the version it requires and fails fast with a message naming the

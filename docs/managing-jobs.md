@@ -24,7 +24,7 @@ var acme = new JobFilter
 | `States`, `Queues`, `Kinds` | Any of the values. |
 | `BatchId` | Members of a [batch](batches.md). |
 | `PartitionKey` | Jobs with that [partition key](concurrency-limits.md). |
-| `Metadata` | Jobs whose metadata contains the object (`@>`): `{"tenant": "acme"}` matches any job with that key and value, and nested objects match the same way. Served by the metadata GIN index. |
+| `Metadata` | Jobs whose metadata contains the object (`@>`): `{"tenant": "acme"}` matches any job with that key and value, and nested objects match the same way. Not indexed: combine it with `States`, `Queues` or `Kinds` to narrow the scan. |
 | `Tags` | Jobs carrying all of the tags. |
 
 Filters combine with AND, and unset ones match everything. `JobListQuery` is a `JobFilter` with paging (`Limit`,

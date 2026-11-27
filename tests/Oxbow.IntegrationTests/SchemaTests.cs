@@ -101,7 +101,7 @@ public sealed class SchemaTests(PostgresFixture database)
     }
 
     [Fact]
-    public async Task No_job_index_is_a_GIN_over_args()
+    public async Task No_job_index_is_a_GIN()
     {
         // A GIN keeps an entry for every distinct value ever indexed, so one over per-job values grows without bound.
         var prefix = await database.CreateSchemaAsync();
@@ -110,8 +110,7 @@ public sealed class SchemaTests(PostgresFixture database)
             FROM pg_index x
             JOIN pg_class i ON i.oid = x.indexrelid
             JOIN pg_am am ON am.oid = i.relam
-            JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = ANY(x.indkey)
-            WHERE x.indrelid = 'public.{prefix}job'::regclass AND am.amname = 'gin' AND a.attname = 'args'
+            WHERE x.indrelid = 'public.{prefix}job'::regclass AND am.amname = 'gin'
             """);
         Assert.Equal("", gin);
     }
