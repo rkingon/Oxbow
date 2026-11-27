@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Oxbow.Benchmarks/Oxbow.Benchmarks.csproj" />
+    <Project Path="benchmarks/Oxbow.LoadTests/Oxbow.LoadTests.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Oxbow.Abstractions/Oxbow.Abstractions.csproj" />
