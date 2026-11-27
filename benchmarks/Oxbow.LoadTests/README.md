@@ -161,3 +161,5 @@ During minutes 175–234, RC1 sustained 1,200 offers/s for a full hour inside th
 The single-insert producer skipped 118 offers in minute 249 and 139 in minute 252. Host samples reached 0% idle in both windows. Queue-wait p99 was 138 ms and 232 ms respectively. In minutes 255–264 the single-insert producer skipped another 375 offers across two minutes. The highest one-minute p99 in this interval was 713.3 ms. Through minute 264, all 18,456,980 acknowledgments reconciled on the first attempt and the job indexes still occupied 116.6 MiB.
 
 Minute 279 recorded 550 skipped single inserts. The receipt IDs place all 550 in the first scheduled second of the cohort. All 71,450 acknowledged jobs completed on their first attempt, with p99 queue wait of 130.8 ms.
+
+At five hours, 21,048,162 of 21,600,000 scheduled offers had been acknowledged. Every acknowledged job completed on its first attempt, and every cohort drained within 30 seconds. The producer skipped 532,887 offers and all 18,951 uncertain IDs were confirmed absent. The number of one-minute p99 queue-wait misses remained at 54. Index storage stayed between 116.45 and 116.60 MiB for over four hours.
