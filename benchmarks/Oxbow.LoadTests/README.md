@@ -79,3 +79,7 @@ After independent review, PR #15 merged into `main` at `2c79ae9`. The Postgres 1
 On the original revision, the burst investigator reproduced the deadline miss with durable writes. The fetch still used an index scan. Turning off the queue-depth observations made little difference. The investigator measured durable commits at 7–23 ms while idle and about 38 ms under load. The same 852,000-job workload with synchronous commits disabled drained in time and reconciled every job exactly once. This control supports a storage-throughput explanation on this host. The investigation closed without a product change. Qualification continues with synchronous commits enabled.
 
 On subsequent runs the harness records latency and admission gate failures while collecting later cohorts, and still exits unsuccessfully if any gate failed. After a missed burst drain deadline it allows a further bounded drain for per-ID reconciliation. This preserves the original deadline as a release gate.
+
+## Merged dev pack
+
+The candidate uses six local NuGet packages at `1.0.0-dev.g2c79ae9` from clean product revision `2c79ae99c4a5f9f28cfd9e20569f1578b856a860`. The baseline control uses `1.0.0-dev.g6f77a34`. Both use harness `3493452`. Each harness resolved Oxbow and Oxbow.Abstractions as packages. The published DLLs matched their NuGet archives byte for byte and both archives identified the expected product commit.
