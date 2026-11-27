@@ -99,25 +99,36 @@ The first merged-package Postgres 16 reproduction passed. Behind 10,000 older jo
 | Third sustained run, interrupted | The first 19 cohorts reconciled all 1,344,060 acknowledged jobs out of 1,368,000 offers. The producer skipped 23,940 single inserts and ten cohorts exceeded one second p99 (maximum 2.781 s). The twentieth producer wrote receipts for all 72,000 jobs, but its attached Docker client exceeded the harness's exit timeout. Store cleanup ended that run before the twentieth cohort could be reconciled. Its results are retained separately from the full retry. |
 | Third sustained run, first retry | Minute 19 exceeded the 30-second drain deadline after all 72,000 offers were acknowledged. Its final outcomes could not be checked after cleanup. In the first 18 minutes all 1,274,341 acknowledged jobs completed once, 21,659 single inserts were skipped and four minutes exceeded one second p99 (maximum 1.580 s). The last resource sample showed 12,965 outstanding jobs across cohorts and 404 MiB of job storage. Median host CPU idle was 0%. |
 | Eight-hour soak at 1,200 offers/s, first attempt | Stopped at minute 58 on the 30-second cohort drain deadline. In the first 57 cohorts, all 3,878,530 acknowledged IDs completed once out of 4,104,000 offers. The producer skipped 225,125 offers. Another 345 had uncertain insert results and were confirmed absent. Thirty-nine cohorts exceeded one second p99, peaking at 15.470 s. Minute 58 receipts recorded 60,050 acknowledged and 11,950 uncertain offers. Cleanup prevented per-ID verification of that cohort. Median host CPU idle was 0%. |
-| Five-minute capacity sweep, one worker node, single inserts at 600/s | All 180,000 offers completed on their first attempt. Queue-wait p99 was 336.9 ms and offer-to-acknowledgment p99 was 272.5 ms. Measured throughput including drain was 600.4 jobs/s. |
-| Five-minute capacity sweep, one worker node, single inserts at 1,200/s | Of 360,000 offers, all 294,984 acknowledged IDs completed on their first attempt. The producer skipped 64,215, and 801 uncertain offers were confirmed absent. The step failed the producer gate. Queue-wait p99 rose to 72.692 s. Throughput including drain was 793.2 jobs/s, or approximately 372 s from the first job creation to the last completion. |
-| Five-minute capacity sweep, one worker node, batched inserts at 600/s | All 180,000 offers completed on the first attempt. With batches of 50 and a 50 ms handler, queue-wait p99 was 272.3 ms and offer-to-acknowledgment p99 was 149.2 ms. Throughput including drain was 601.9 jobs/s. The single-insert steps used a 0 ms handler. |
-| Five-minute capacity sweep, one worker node, batched inserts at 1,200/s | All 360,000 offers completed on the first attempt. Offer-to-acknowledgment p99 was 44.4 ms, but queue-wait p99 reached 66.008 s. Throughput including drain was 981.4 jobs/s. |
-| Five-minute capacity sweep, one worker node, COPY at 600/s | All 180,000 offers completed on the first attempt. With a 0 ms handler, queue-wait p99 was 133.3 ms, offer-to-acknowledgment p99 was 64.6 ms and throughput including drain was 600.4 jobs/s. |
-| Five-minute capacity sweep, one worker node, COPY at 1,200/s | All 360,000 offers completed on their first attempt. Offer-to-acknowledgment p99 was 9.7 ms. Queue-wait p99 reached 61.304 s and throughput including drain was 995 jobs/s. |
-| Five-minute capacity sweep, two worker nodes, single inserts at 1,200/s | The producer skipped 700 of 360,000 offers. All 359,300 acknowledged jobs completed once. Queue-wait p99 was 189.1 ms and throughput including drain was 1,198 jobs/s. Median host CPU idle during the producer samples was 21%, compared with 0% in the one-node single-insert step at the same rate. |
-| Five-minute capacity sweep, two worker nodes, single inserts at 2,400/s | The producer skipped 4,615 of 720,000 offers. All 715,385 acknowledged IDs completed once. Queue-wait p99 reached 61.429 s, with throughput of 1,976.7 jobs/s including drain. Median host CPU idle during producer sampling was 54.5%. |
-| Five-minute capacity sweep, two worker nodes, batched inserts at 1,200/s | All 360,000 offers completed on the first attempt. Queue-wait p99 was 100.8 ms and offer-to-acknowledgment p99 was 24.3 ms. Throughput including drain was 1,200.6 jobs/s, with 71% median host CPU idle during producer sampling. |
-| Five-minute capacity sweep, two worker nodes, batched inserts at 2,400/s | All 720,000 offers completed once. Offer-to-acknowledgment p99 was 12.2 ms, while queue-wait p99 reached 62.042 s. Throughput including drain was 1,985.8 jobs/s. Median host CPU idle during producer sampling was 79.5%. |
-| Five-minute capacity sweep, two worker nodes, COPY at 1,200/s | All 360,000 offers completed once. Queue-wait p99 was 100.8 ms, and throughput including drain was 1,200.5 jobs/s. Median host CPU idle during producer sampling was 79%. |
-| Five-minute capacity sweep, two worker nodes, COPY at 2,400/s | All 720,000 offers completed once. Offer-to-acknowledgment p99 was 25.2 ms. Queue-wait p99 reached 61.569 s, and throughput including drain was 1,988.3 jobs/s. Median host CPU idle during producer sampling was 70%. |
-| Five-minute capacity sweep, four worker nodes, single inserts at 2,400/s | The producer skipped 8,255 of 720,000 offers. All 711,745 acknowledged jobs completed once. Queue-wait p99 was 659.8 ms and throughput including drain was 2,369.3 jobs/s. Median host CPU idle during producer sampling was 37%. |
-| Five-minute capacity sweep, four worker nodes, single inserts at 4,800/s | The producer skipped 21,370 of 1,440,000 offers. All 1,418,630 acknowledged jobs completed once. Queue-wait p99 reached 62.224 s and throughput including drain was 3,914.4 jobs/s. Median host CPU idle during producer sampling was 48%. |
-| Five-minute capacity sweep, four worker nodes, batched inserts at 2,400/s | All 720,000 offers completed on the first attempt. Queue-wait p99 was 100.3 ms and throughput including drain was 2,400.2 jobs/s. Median host CPU idle during producer sampling was 86.5%. |
-| Five-minute capacity sweep, four worker nodes, batched inserts at 4,800/s | All 1,440,000 offers completed on the first attempt. Offer-to-acknowledgment p99 was 39.3 ms, queue-wait p99 was 71.717 s and throughput including drain was 3,868.2 jobs/s. Median host CPU idle during producer sampling was 82%. |
 
 Job storage reached 194 MiB at minute 5, 382 MiB at minute 17, 512 MiB at minute 27 and 678 MiB at minute 37. It reached 817 MiB at minute 47 and 924 MiB at minute 56. PostgreSQL estimated 360,479 live tuples after 32 autovacuums at minute 37. A subsequent catalog sample measured 195 MiB for the job arguments GIN index, 159 MiB for the metadata GIN index and 87 MiB for the fetch index. From 08:40 to 08:50 UTC the arguments index grew from 249 to 297 MiB and the metadata index grew from 203 to 243 MiB. The table itself stayed at about 209 MiB during that interval. The individual index measurements are saved in `overnight-index-samples.jsonl` in the run directory. The retention and index-growth investigation is in Paseo workspace `wks_e405e763fc4d725b`, agent `40a77458-1a5f-4d10-a0e6-cf19b96950ce`.
 
 The investigator reproduced cumulative GIN growth on PostgreSQL 17 with 60,000 retained rows, 20,000 inserts per cycle and an explicit vacuum each cycle. After 1.8 million inserts with distinct JSON values, the arguments GIN held 1,800,005 entries and occupied 128.9 MB. Rebuilding it reduced it to 60,005 entries and 4.7 MB. Reusing 5,000 distinct values kept the control index at 6.2 MB. The metadata GIN reached 107.4 MB with distinct outputs and shrank to 4.4 MB on rebuild. The proposed v3 migration drops both default GIN indexes. The metadata-filter performance tradeoff and migration are under review in [PR #16](https://github.com/rkingon/Oxbow/pull/16). These changes are outside the packaged candidate measured here.
 
 For subsequent soak retries, the controller records a missed 30-second cohort drain as a failed gate and allows another 90 seconds for per-ID reconciliation. The next producer starts on the minute schedule while verification runs. The first eight-hour attempt used controller `16d56d9`. A fresh 480-minute attempt using `165baa4` is queued after capacity and the 30-minute retry, with the same packaged binaries and 1,200 offers/s target.
+
+### Five-minute capacity sweep
+
+Each step offered work for 300 seconds. Batched inserts and COPY used groups of 50. The handler delay was 50 ms for batched inserts and 0 ms for single inserts and COPY. Host idle is the median across host samples taken during producer sampling.
+
+| Nodes | Insert method | Offered/s | Completed | Skipped | p99 queue wait (ms) | p99 offer to ack (ms) | Jobs/s incl. drain | Host idle (%) |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | Single | 600 | 180,000 | 0 | 336.9 | 272.5 | 600.4 | 3 |
+| 1 | Single | 1,200 | 294,984 | 64,215 | 72,691.5 | 1,574.1 | 793.2 | 0 |
+| 1 | Batched | 600 | 180,000 | 0 | 272.3 | 149.2 | 601.9 | 0 |
+| 1 | Batched | 1,200 | 360,000 | 0 | 66,007.6 | 44.4 | 981.4 | 3.5 |
+| 1 | COPY | 600 | 180,000 | 0 | 133.3 | 64.6 | 600.4 | 7.5 |
+| 1 | COPY | 1,200 | 360,000 | 0 | 61,303.7 | 9.7 | 995.0 | 86 |
+| 2 | Single | 1,200 | 359,300 | 700 | 189.1 | 281.9 | 1,198.0 | 21 |
+| 2 | Single | 2,400 | 715,385 | 4,615 | 61,429.1 | 188.3 | 1,976.7 | 54.5 |
+| 2 | Batched | 1,200 | 360,000 | 0 | 100.8 | 24.3 | 1,200.6 | 71 |
+| 2 | Batched | 2,400 | 720,000 | 0 | 62,042.1 | 12.2 | 1,985.8 | 79.5 |
+| 2 | COPY | 1,200 | 360,000 | 0 | 100.8 | 10.4 | 1,200.5 | 79 |
+| 2 | COPY | 2,400 | 720,000 | 0 | 61,568.5 | 25.2 | 1,988.3 | 70 |
+| 4 | Single | 2,400 | 711,745 | 8,255 | 659.8 | 263.0 | 2,369.3 | 37 |
+| 4 | Single | 4,800 | 1,418,630 | 21,370 | 62,224.4 | 137.9 | 3,914.4 | 48 |
+| 4 | Batched | 2,400 | 720,000 | 0 | 100.3 | 10.9 | 2,400.2 | 86.5 |
+| 4 | Batched | 4,800 | 1,440,000 | 0 | 71,717.4 | 39.3 | 3,868.2 | 82 |
+| 4 | COPY | 2,400 | 720,000 | 0 | 83.2 | 27.6 | 2,400.5 | 57 |
+| 4 | COPY | 4,800 | 1,440,000 | 0 | 71,975.8 | 47.1 | 3,865.7 | 81 |
+
+All 18 steps drained. Of 11,340,000 offers, 11,240,044 were acknowledged and completed on the first attempt. The producer skipped 99,155 single-insert offers. Another 801 uncertain offers from the one-node single-insert step at 1,200/s were confirmed absent. That step failed the producer gate. The 1,200/s one-node single-insert run spanned approximately 372 seconds from first creation to last completion.
