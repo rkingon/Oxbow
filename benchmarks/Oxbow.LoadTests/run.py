@@ -6,7 +6,9 @@ import subprocess
 import statistics
 import tempfile
 import time
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -45,15 +47,17 @@ class Run:
         self.children = []
         self.phases = []
         self.workers = []
+        self.report_lock = threading.Lock()
         self.failed_gates = set()
         self.next_seq = 1
         self.begin = time.monotonic()
 
     def report(self, event, **data):
         record = dict(event=event, elapsed=round(time.monotonic() - self.begin, 3), **data)
-        print(json.dumps(record), flush=True)
-        with (self.folder / "summary.jsonl").open("a") as out:
-            print(json.dumps(record), file=out)
+        with self.report_lock:
+            print(json.dumps(record), flush=True)
+            with (self.folder / "summary.jsonl").open("a") as out:
+                print(json.dumps(record), file=out)
 
     def gate(self, condition, message):
         if not condition:
@@ -362,21 +366,28 @@ def soak(run):
         run.worker(name)
     # Dispatch one-minute cohorts on a fixed wall-clock schedule. Reconcile each
     # while the next runs and before its five-minute retention expires.
-    previous = None
+    pending = []
     start = time.monotonic()
-    for minute in range(run.options.minutes):
-        time.sleep(max(0, start + minute*60 - time.monotonic()))
-        api, batch, delay = (("many", 50, 50), ("copy", 50, 0), ("single", 1, 50))[minute % 3]
-        phase = run.phase(f"minute-{minute+1}-{api}", run.options.rate, 60, batch, delay, api)
-        if previous:
-            check_cohort(run, previous)
-        run.report("resources", minute=minute+1, outstanding=run.depth(),
-                   containers=command("docker", "stats", "--no-stream", "--format",
-                        "{{.Name}} {{.MemUsage}} {{.CPUPerc}}", run.pg, *run.workers),
-                   pg=run.sql("""select n_live_tup,n_dead_tup,autovacuum_count,pg_total_relation_size(relid)
-                       from pg_stat_user_tables where relname='oxbow_job'"""))
-        previous = phase
-    check_cohort(run, previous)
+    with ThreadPoolExecutor(max_workers=4) as verifier:
+        for minute in range(run.options.minutes):
+            time.sleep(max(0, start + minute*60 - time.monotonic()))
+            while pending and pending[0].done():
+                pending.pop(0).result()
+            require(len(pending) < 4, "Soak verification falling behind five-minute retention")
+            api, batch, delay = (("many", 50, 50), ("copy", 50, 0), ("single", 1, 50))[minute % 3]
+            phase = run.phase(f"minute-{minute+1}-{api}", run.options.rate, 60, batch, delay, api)
+            # Start checking at the next minute boundary, as in the baseline profile.
+            if minute:
+                pending.append(verifier.submit(check_cohort, run, previous))
+            run.report("resources", minute=minute+1, outstanding=run.depth(),
+                       containers=command("docker", "stats", "--no-stream", "--format",
+                            "{{.Name}} {{.MemUsage}} {{.CPUPerc}}", run.pg, *run.workers),
+                       pg=run.sql("""select n_live_tup,n_dead_tup,autovacuum_count,pg_total_relation_size(relid)
+                           from pg_stat_user_tables where relname='oxbow_job'"""))
+            previous = phase
+        pending.append(verifier.submit(check_cohort, run, previous))
+        for cohort in pending:
+            cohort.result()
     run.drain()
 
 
@@ -403,8 +414,18 @@ def check_cohort(run, phase):
 
         wait_for(receipts_ready, "Timed out waiting for soak receipts: " + str(phase["path"]), 100)
     first, end = phase["first"], phase["first"] + phase["size"]
-    wait_for(lambda: run.sql(f"""select exists(select from oxbow_job where finalized_at is null
-        and (args->>'seq')::int >= {first} and (args->>'seq')::int < {end})""") == "f", "Soak cohort drain", 30)
+    def drained():
+        return run.sql(f"""select exists(select from oxbow_job where finalized_at is null
+            and (args->>'seq')::int >= {first} and (args->>'seq')::int < {end})""") == "f"
+
+    started = time.monotonic()
+    while not drained():
+        if time.monotonic() - started >= 30:
+            run.gate(False, "Soak cohort exceeded 30-second drain deadline")
+            run.report("late-drain", label=phase["label"], first=first, endExclusive=end)
+            wait_for(drained, "Soak cohort still outstanding after extended drain", 90, 1)
+            break
+        time.sleep(0.25)
     p99 = run.verify(phase)
     run.gate(p99 < 1000, "Cohort exceeded the one-second queue-wait gate")
 
