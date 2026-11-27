@@ -117,7 +117,12 @@ class Run:
                     subprocess.run(["docker", "logs", "--tail", "200", ident], stdout=out, stderr=out)
             subprocess.run(["docker", "rm", "-fv", ident], capture_output=True)
         for proc in self.children:
-            proc.wait(timeout=15)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                # The run-owned containers have been removed; release a lingering CLI attachment.
+                proc.kill()
+                proc.wait()
         subprocess.run(["docker", "network", "rm", self.name], capture_output=True)
 
     def phase(self, label, rate, seconds, batch=25, delay=50, api="many", queue="default", key="plain"):
@@ -155,7 +160,8 @@ class Run:
                         "Queue did not drain", seconds, 2 if seconds > 180 else 0.25)
 
     def verify(self, phase, outage=False, allow_retries=False):
-        require(phase["proc"].wait(timeout=90) == 0, "Producer failed: " + str(phase["path"]))
+        if self.options.scenario != "soak":
+            require(phase["proc"].wait(timeout=90) == 0, "Producer failed: " + str(phase["path"]))
         receipts = sorted((json.loads(line) for line in phase["path"].read_text().splitlines()
                            if line.startswith("{")), key=lambda r: r["start"])
         first = phase["first"]
@@ -375,7 +381,27 @@ def soak(run):
 
 
 def check_cohort(run, phase):
-    require(phase["proc"].wait(timeout=80) == 0, "Soak producer failed")
+    # Docker's attached client may linger after the final insert returns.
+    # Wait for the receipt stream, then verify its exact ranges and durable outcomes.
+    offers = 0
+    with phase["path"].open("rb") as stream:
+        def receipts_ready():
+            nonlocal offers
+            status = phase["proc"].poll()
+            while True:
+                start = stream.tell()
+                line = stream.readline()
+                if not line.endswith(b"\n"):
+                    stream.seek(start)
+                    break
+                if line.startswith(b"{"):
+                    offers += json.loads(line)["size"]
+            require(offers <= phase["size"], "Extra offers in cohort manifest")
+            require(status in (None, 0), "Soak producer failed: " + str(phase["path"]))
+            require(status is None or offers == phase["size"], "Incomplete cohort manifest")
+            return offers == phase["size"]
+
+        wait_for(receipts_ready, "Timed out waiting for soak receipts: " + str(phase["path"]), 100)
     first, end = phase["first"], phase["first"] + phase["size"]
     wait_for(lambda: run.sql(f"""select exists(select from oxbow_job where finalized_at is null
         and (args->>'seq')::int >= {first} and (args->>'seq')::int < {end})""") == "f", "Soak cohort drain", 30)
