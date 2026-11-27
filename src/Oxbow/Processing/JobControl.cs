@@ -75,7 +75,6 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
 
     public async Task<T> StepAsync<T>(string name, Func<CancellationToken, Task<T>> run, CancellationToken cancellationToken)
     {
-        var typeInfo = (JsonTypeInfo<T>)runtime.Json.GetTypeInfo(typeof(T));
         await HeartbeatAsync(cancellationToken).ConfigureAwait(false);
         string? recorded;
         var command = runtime.DataSource.CreateCommand(runtime.Sql.StepGet);
@@ -99,18 +98,18 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
 
         if (recorded is not null)
         {
-            return ReadStep(name, recorded, typeInfo);
+            return ReadStep<T>(name, recorded);
         }
 
         var result = await run(cancellationToken).ConfigureAwait(false);
-        var (current, first) = await RecordStepAsync(name, WriteStep(name, result, typeInfo), cancellationToken)
+        var (current, first) = await RecordStepAsync(name, WriteStep(name, result), cancellationToken)
             .ConfigureAwait(false);
         if (!current)
         {
             throw new JobAttemptSupersededException(row.Id);
         }
 
-        return first is null ? result : ReadStep(name, first, typeInfo);
+        return first is null ? result : ReadStep<T>(name, first);
     }
 
     /// <summary>
@@ -187,23 +186,41 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
     /// <summary>
     /// After the worker returns from an attempt that locked itself: waits while the job's row is still locked, likely by a
     /// transaction the worker left open, so that the completer's batch of other jobs' outcomes doesn't wait on it instead.
+    /// Returns false if shutdown came first: the outcome mustn't be queued then, and the rescuer recovers the job.
     /// </summary>
-    public async Task WaitForAttemptLockAsync(ILogger logger, CancellationToken cancellationToken)
+    public async Task<bool> WaitForAttemptLockAsync(ILogger logger, CancellationToken cancellationToken)
     {
         if (!_locked)
         {
-            return;
+            return true;
         }
 
         var warned = false;
+        var probeFailed = false;
         try
         {
-            while (await AttemptLockHeldAsync(cancellationToken).ConfigureAwait(false))
+            while (true)
             {
-                if (!warned)
+                try
                 {
-                    Log.AttemptLockHeld(logger, row.Id);
-                    warned = true;
+                    if (!await AttemptLockHeldAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    if (!warned)
+                    {
+                        Log.AttemptLockHeld(logger, row.Id);
+                        warned = true;
+                    }
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    if (!probeFailed)
+                    {
+                        Log.AttemptLockProbeFailed(logger, ex, row.Id);
+                        probeFailed = true;
+                    }
                 }
 
                 await Task.Delay(AttemptLockPollInterval, timeProvider, cancellationToken).ConfigureAwait(false);
@@ -211,12 +228,8 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-        }
-#pragma warning disable CA1031 // The probe is a courtesy to other jobs; the outcome is written either way.
-        catch (Exception ex)
-#pragma warning restore CA1031
-        {
-            Log.AttemptLockProbeFailed(logger, ex, row.Id);
+            Log.AttemptOutcomeLeftForRescue(logger, row.Id);
+            return false;
         }
     }
 
@@ -234,9 +247,11 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
     // look like an envelope.
     private bool Encrypted => ArgsEnvelope.IsSealed(row.Args);
 
-    private string WriteStep<T>(string name, T result, JsonTypeInfo<T> typeInfo)
+    private JsonTypeInfo<T> TypeInfo<T>() => (JsonTypeInfo<T>)runtime.Json.GetTypeInfo(typeof(T));
+
+    private string WriteStep<T>(string name, T result)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(result, typeInfo);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(result, TypeInfo<T>());
         if (bytes.Length > JobRow.MaxOutputSize)
         {
             throw new InvalidOperationException(string.Format(
@@ -251,12 +266,12 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
         return Encrypted ? ArgsEnvelope.Seal(runtime.ArgsProtector!.ProtectStepResult(row.Kind, json)) : json;
     }
 
-    private T ReadStep<T>(string name, string stored, JsonTypeInfo<T> typeInfo)
+    private T ReadStep<T>(string name, string stored)
     {
         using var document = JsonDocument.Parse(stored);
         if (!Encrypted)
         {
-            return document.RootElement.Deserialize(typeInfo)!;
+            return Deserialize<T>(document.RootElement);
         }
 
         if (document.RootElement.ValueKind != JsonValueKind.String
@@ -277,8 +292,11 @@ internal sealed class JobControl(OxbowRuntime runtime, JobRow row, TimeProvider 
             throw new InvalidOperationException($"The recorded result of job {row.Id}'s step '{name}' can't be decrypted: {ex.Message}", ex);
         }
 
-        return JsonSerializer.Deserialize(plaintext, typeInfo)!;
+        using var decrypted = JsonDocument.Parse(plaintext);
+        return Deserialize<T>(decrypted.RootElement);
     }
+
+    private T Deserialize<T>(JsonElement output) => output.Deserialize(TypeInfo<T>())!;
 
     /// <summary>Runs an attempt-guarded write; false if it was skipped, because the attempt isn't current or its row is locked.</summary>
     private async Task<bool> WriteAsync(string sql, Action<NpgsqlCommand>? addParameters, CancellationToken cancellationToken)

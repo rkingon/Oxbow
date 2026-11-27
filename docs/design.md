@@ -323,7 +323,8 @@ Heartbeats and progress select their row `FOR NO KEY UPDATE SKIP LOCKED`, so a w
 transaction doesn't wait on itself, and a skipped heartbeat doesn't count toward the throttle. The rescuer locks its
 candidates `SKIP LOCKED` and leaves a locked one for a later pass. After a worker that took the lock returns, the
 executor waits while the row is still locked (`FOR NO KEY UPDATE SKIP LOCKED` finds nothing) before queuing the outcome,
-so a transaction the worker left open holds only its own job, not the completer's batch.
+so a transaction the worker left open holds only its own job, not the completer's batch. If shutdown comes first, the
+outcome isn't queued at all and the rescuer recovers the job.
 
 **Completer.** Outcomes are queued and written in batches through `JobSetStateIfRunningMany`: the completer flushes
 every 50 ms or at 5,000 rows, makes workers wait when the backlog reaches 20,000, and retries a failed batch three

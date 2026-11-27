@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Oxbow.Testing;
 
 namespace Oxbow.Tests;
@@ -33,6 +34,34 @@ public sealed class StepTests
         Assert.Equal(42, answered);
         Assert.Equal(["answer"], ran);
         Assert.Equal(42, runtime.Steps["answer"].GetInt32());
+    }
+
+    [Fact]
+    public async Task Steps_heartbeat_like_Oxbows_executor()
+    {
+        var runtime = new RecordingJobRuntime();
+        var job = new Job<Turn>(Row(), new Turn(1), runtime);
+
+        await job.StepAsync("one", _ => Task.FromResult(1));
+        await job.StepAsync("two", _ => Task.CompletedTask);
+
+        Assert.Equal(2, runtime.Heartbeats);
+    }
+
+    [Fact]
+    public async Task A_step_without_a_result_needs_no_type_registered_with_a_source_generated_resolver()
+    {
+        var runtime = new RecordingJobRuntime
+        {
+            JsonSerializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { TypeInfoResolver = StepJsonContext.Default },
+        };
+        runtime.RecordStep<object?>("earlier", null);
+        var job = new Job<Turn>(Row(), new Turn(1), runtime);
+
+        await job.StepAsync("earlier", _ => throw new InvalidOperationException("Replayed, not run."));
+        await job.StepAsync("now", _ => Task.CompletedTask);
+
+        Assert.Equal(JsonValueKind.Null, runtime.Steps["now"].ValueKind);
     }
 
     [Fact]
@@ -164,3 +193,6 @@ public sealed class StepTests
         Tags = [],
     };
 }
+
+[JsonSerializable(typeof(int))]
+internal sealed partial class StepJsonContext : JsonSerializerContext;

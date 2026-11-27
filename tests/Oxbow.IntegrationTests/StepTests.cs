@@ -1,5 +1,9 @@
 using System.Collections.Concurrent;
 using System.Data;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.DataProtection;
 using Npgsql;
 
@@ -175,6 +179,44 @@ public sealed class LeakedLockWorker(NpgsqlDataSource dataSource) : IWorker<Leak
         await job.LockAttemptAsync(transaction, cancellationToken);
         Open[job.Args.Key] = transaction;
     }
+}
+
+/// <summary>A step with no result and one with a string, under a source-generated resolver that registers no <c>object</c>.</summary>
+[JobKind("void_step")]
+public sealed record VoidStepArgs : IJobArgs;
+
+public sealed class VoidStepWorker(JobRecorder recorder) : IWorker<VoidStepArgs>
+{
+    public async Task WorkAsync(Job<VoidStepArgs> job, CancellationToken cancellationToken)
+    {
+        recorder.Started(job.Id);
+        await job.StepAsync("notify", _ =>
+        {
+            recorder.Events.Enqueue("notify");
+            return Task.CompletedTask;
+        }, cancellationToken);
+        var value = await job.StepAsync("value", _ => Task.FromResult("v"), cancellationToken);
+        if (recorder.RunCounts[job.Id] == 1)
+        {
+            throw new JobSnoozeException(TimeSpan.Zero);
+        }
+
+        recorder.Events.Enqueue(value);
+    }
+}
+
+[JsonSerializable(typeof(VoidStepArgs))]
+[JsonSerializable(typeof(string))]
+internal sealed partial class VoidStepJsonContext : JsonSerializerContext;
+
+/// <summary>A protector written before steps: it encrypts args but has no step result members.</summary>
+public sealed class ArgsOnlyProtector : IJobArgsProtector
+{
+    public string Protect(string kind, string args) => Convert.ToBase64String(Encoding.UTF8.GetBytes(args));
+
+    public string Unprotect(string kind, string payload) => Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+
+    public byte[] HashUniqueKey(ReadOnlySpan<byte> uniqueKey) => throw new NotSupportedException();
 }
 
 public sealed class StepTests(PostgresFixture database) : IDisposable
@@ -510,6 +552,98 @@ public sealed class StepTests(PostgresFixture database) : IDisposable
         await transaction.CommitAsync();
         await connection.DisposeAsync();
         await app.WaitForStateAsync(leaked, JobState.Completed);
+    }
+
+    [Fact]
+    public async Task A_lock_still_held_at_shutdown_leaves_its_outcome_for_the_rescuer_and_doesnt_hold_up_others()
+    {
+        await using var app = await StartAsync();
+        var key = Guid.NewGuid();
+        var leaked = (await app.Client.InsertAsync(new LeakedLockArgs(key))).Job.Id;
+        var held = Guid.NewGuid();
+        var other = (await app.Client.InsertAsync(new HoldArgs(held))).Job.Id;
+        var (_, release) = await HoldWorker.WaitHeldAsync(held);
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        {
+            while (!LeakedLockWorker.Open.ContainsKey(key))
+            {
+                await Task.Delay(20, cts.Token);
+            }
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        var stop = app.Host.StopAsync();
+        release.SetResult();
+        await stop;
+
+        // The completer would have retried a batch blocked on the lock for 3 x 30 s.
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(20), $"Shutdown took {stopwatch.Elapsed}.");
+        Assert.Equal(JobState.Completed, (await app.Client.GetAsync(other))!.State);
+        var row = (await app.Client.GetAsync(leaked))!;
+        Assert.Equal(JobState.Running, row.State);
+        Assert.Empty(row.Errors);
+
+        var transaction = LeakedLockWorker.Open[key];
+        var connection = transaction.Connection!;
+        await transaction.RollbackAsync();
+        await connection.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task A_result_committed_while_the_insert_waits_on_it_is_the_one_returned()
+    {
+        var (app, job, release) = await HoldAsync();
+        await using var _ = app;
+        await using var owner = new NpgsqlConnection(database.OwnerConnectionString);
+        await owner.OpenAsync();
+        await using var competing = await owner.BeginTransactionAsync();
+        await using (var insert = new NpgsqlCommand(
+            $"""INSERT INTO public.{app.Prefix}job_step (job_id, name, output) VALUES ({job.Id}, 'blocked', '"theirs"')""", owner, competing))
+        {
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        var step = job.StepAsync("blocked", _ => Task.FromResult("mine"));
+        await Task.Delay(500);
+        Assert.False(step.IsCompleted);
+        await competing.CommitAsync();
+
+        Assert.Equal("theirs", await step.WaitAsync(TimeSpan.FromSeconds(10)));
+        release.SetResult();
+    }
+
+    [Fact]
+    public async Task A_step_with_no_result_needs_no_type_registered_with_a_source_generated_resolver()
+    {
+        await using var app = await TestApp.StartAsync(database, await database.CreateSchemaAsync(), o =>
+        {
+            o.Queues["default"] = new QueueOptions();
+            o.JsonSerializerOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { TypeInfoResolver = VoidStepJsonContext.Default };
+        }, b => b.AddWorker<VoidStepArgs, VoidStepWorker>());
+        var id = (await app.Client.InsertAsync(new VoidStepArgs())).Job.Id;
+
+        await app.WaitForStateAsync(id, JobState.Completed);
+
+        Assert.Equal(2, app.Recorder.RunCounts[id]);
+        Assert.Equal(["notify", "v"], app.Recorder.Events);
+        Assert.Equal("null", await StoredStepAsync(app, id, "notify"));
+    }
+
+    [Fact]
+    public async Task A_protector_without_step_support_fails_an_encrypted_jobs_step_and_stores_nothing()
+    {
+        await using var app = await TestApp.StartAsync(database, await database.CreateSchemaAsync(), o =>
+            o.Queues["default"] = new QueueOptions(), b =>
+        {
+            b.Services.AddSingleton<IJobArgsProtector, ArgsOnlyProtector>();
+            b.AddWorker<SecretReplayedArgs, SecretReplayedWorker>();
+        });
+        var id = (await app.Client.InsertAsync(new SecretReplayedArgs("ada@example.com"), new InsertOptions { MaxAttempts = 1 })).Job.Id;
+
+        var row = await app.WaitForStateAsync(id, JobState.Discarded);
+
+        Assert.Contains("doesn't encrypt step results", Assert.Single(row.Errors).Error, StringComparison.Ordinal);
+        Assert.Equal(0L, await StepCountAsync(app, id));
     }
 
     [Fact]

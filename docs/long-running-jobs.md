@@ -102,7 +102,8 @@ while this attempt is the one running:
   current. Lock before anything else in the transaction, and retry the whole transaction on `40001`. `READ COMMITTED`
   has neither problem.
 - **Commit before the worker returns.** A worker that returns with the row still locked holds its own outcome, and its
-  worker slot, until the transaction ends, with a warning in the log.
+  worker slot, until the transaction ends, with a warning in the log. If the host shuts down first, the outcome isn't
+  written at all: the job stays `running` and the rescuer picks it up.
 - While the lock is held, the rescuer leaves the job for a later pass, `CancelAsync` on it waits for the transaction,
   and the attempt's heartbeats and progress are skipped rather than waiting on a transaction the worker is inside.
 - The transaction must be an `NpgsqlTransaction` on the database Oxbow uses. With EF Core,

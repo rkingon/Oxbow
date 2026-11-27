@@ -152,9 +152,10 @@ internal sealed class JobExecutor(
             }
         }
 
-        if (control is not null)
+        if (control is not null && !await control.WaitForAttemptLockAsync(logger, workToken).ConfigureAwait(false))
         {
-            await control.WaitForAttemptLockAsync(logger, workToken).ConfigureAwait(false);
+            // Queuing the outcome would hold the completer's batch on the lock; the row stays running for the rescuer.
+            return;
         }
 
         var now = timeProvider.GetUtcNow();

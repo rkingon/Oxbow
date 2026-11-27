@@ -18,7 +18,8 @@ Steps and attempt locks for long-running jobs, and schema version 3. **Upgrade t
   `oxbow_job_step`. See [docs/long-running-jobs.md](docs/long-running-jobs.md).
 - `job.LockAttemptAsync(transaction)` locks the job's row in your transaction while this attempt is the one running,
   so your writes commit only as the current attempt's. Once the rescuer has taken the job, it fails the transaction and
-  throws `JobAttemptSupersededException`. A worker that returns with the lock still held holds only its own outcome.
+  throws `JobAttemptSupersededException`. A worker that returns with the lock still held holds only its own outcome,
+  or at shutdown leaves the job to the rescuer.
 - `IJobArgsProtector.ProtectStepResult` and `UnprotectStepResult`, implemented by `Oxbow.DataProtection` under a purpose
   apart from args. A custom protector that doesn't implement them fails steps of encrypted kinds.
 - `RecordingJobRuntime` in `Oxbow.Testing` records steps (`Steps`, seeded with `RecordStep`) and counts

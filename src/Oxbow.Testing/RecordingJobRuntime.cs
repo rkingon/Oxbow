@@ -75,11 +75,12 @@ public sealed class RecordingJobRuntime(TimeProvider? timeProvider = null) : IJo
     public async Task<T> StepAsync<T>(string name, Func<CancellationToken, Task<T>> run, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
+        await HeartbeatAsync(cancellationToken).ConfigureAwait(false);
         lock (_steps)
         {
             if (_steps.TryGetValue(name, out var recorded))
             {
-                return recorded.Deserialize(TypeInfo<T>())!;
+                return Deserialize<T>(recorded);
             }
         }
 
@@ -89,7 +90,7 @@ public sealed class RecordingJobRuntime(TimeProvider? timeProvider = null) : IJo
         {
             if (!_steps.TryAdd(name, element))
             {
-                return _steps[name].Deserialize(TypeInfo<T>())!;
+                return Deserialize<T>(_steps[name]);
             }
         }
 
@@ -120,6 +121,8 @@ public sealed class RecordingJobRuntime(TimeProvider? timeProvider = null) : IJo
         using var document = JsonDocument.Parse(bytes);
         return document.RootElement.Clone();
     }
+
+    private T Deserialize<T>(JsonElement recorded) => recorded.Deserialize(TypeInfo<T>())!;
 
     private JsonTypeInfo<T> TypeInfo<T>()
     {
