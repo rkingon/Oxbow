@@ -150,6 +150,16 @@ The [per-minute soak results](results/3364be0-soak.csv) contain reconciled count
 
 At the final sample the job table occupied 131.08 MiB and indexes occupied 117.06 MiB. At matched volume near 9.1 million completions, table and indexes together occupied 249 MiB on this build and 1,517 MiB on `2c79ae9`. Across the full soak, all 65 latency misses and 564,104 of 564,922 skips occurred in minutes with at least one host CPU sample at or below 10% idle. The 248 other minutes had zero latency misses and 818 skips. All failures count toward qualification on this shared host.
 
+### Standalone 30-minute runs
+
+Each run starts a fresh PostgreSQL instance and schedules 1,200 offers/s on the same dev package and harness as the eight-hour soak.
+
+| Run | Offered | Acknowledged and completed on first attempt | Producer skips | Uncertain IDs | Highest one-minute p99 wait | Verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | 2,160,000 | 2,137,279 | 22,721 | 0 | 898.6 ms | Admission failed in nine minutes. All 30 cohorts met the drain and queue-wait limits. |
+
+### Run history
+
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
 
 The eight-hour soak at 1,200 offers/s started at 13:45:54 UTC on November 27. The live test database reported schema version 3 and neither of the full JSON GIN indexes was present. The supervisor records table and individual index sizes each minute. The previous build’s last soak was superseded after 7 verified cohorts to prioritize this candidate. Its partial results are retained in `merged-2c79ae9`. Qualification of the two revisions is tracked separately.
