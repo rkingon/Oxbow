@@ -85,3 +85,8 @@ On subsequent runs the harness records latency and admission gate failures while
 The candidate uses six local NuGet packages at `1.0.0-dev.g2c79ae9` from clean product revision `2c79ae99c4a5f9f28cfd9e20569f1578b856a860`. The baseline control uses `1.0.0-dev.g6f77a34`. Both use harness `3493452`. Each harness resolved Oxbow and Oxbow.Abstractions as packages. The published DLLs matched their NuGet archives byte for byte and both archives identified the expected product commit.
 
 The first merged-package Postgres 16 reproduction passed. Behind 10,000 older jobs, the second tenant's p99 wait was 88.3 ms, compared with 14.865 s in the original shared-host run. All 11,250 offers completed once and the measured burst equivalent was 64. This preliminary result precedes the matched runs with host headroom.
+
+| Merged-package retest | Result |
+|---|---|
+| Matched PG16 rate-limited tenant run, 10,000 older jobs | Second-tenant p99 claim wait was 17.081 s on the baseline and 96 ms on the candidate. All 1,000 second-tenant jobs completed once on each revision. Both held the configured burst of 64. |
+| PG16 and PG17 recovery | Across leader kill, graceful stop and database restart, all 24,075 acknowledged background jobs completed. The 1,425 unacknowledged offers during the outages were absent on reconciliation. Each crash probe was rescued within 54.3 s, and its batch callback ran once. |
