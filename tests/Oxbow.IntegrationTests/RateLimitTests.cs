@@ -267,7 +267,6 @@ public sealed class RateLimitTests(PostgresFixture database)
         var prefix = await database.CreateSchemaAsync();
         await using var app = await TestApp.StartAsync(database, prefix);
         var sql = new OxbowSql("public", prefix);
-        var limits = RoomOfTwo(limit);
         foreach (var key in new[] { "a", "b", "c" })
         {
             await app.Client.InsertManyFastAsync(Enumerable.Range(0, 50).Select(_ => new InsertManyItem(new LimitedArgs(key))));
@@ -275,7 +274,7 @@ public sealed class RateLimitTests(PostgresFixture database)
 
         await app.Client.InsertManyAsync(Enumerable.Range(0, 3).Select(_ => new InsertManyItem(new LimitedArgs("d"))));
 
-        var fetch = await FetchAsync(app, sql, limits);
+        var fetch = await FetchAsync(app, sql, RoomOfTwo(limit));
         Assert.Equal(["a", "a", "b", "b", "c", "c", "d", "d"], fetch.Jobs.Select(j => j.PartitionKey![13..^2]).Order());
     }
 
