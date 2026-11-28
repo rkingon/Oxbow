@@ -10,6 +10,21 @@ export TZ=UTC
   docker info --format '{{.NCPU}} CPUs {{.MemTotal}} bytes'
   docker ps --format '{{.Names}} {{.Image}}'
 } > evidence/runner.txt
+# Vary only the number of producer connections. The harness still dispatches
+# open-loop and counts every skipped ID against its 512-call admission limit.
+harness_dir="$RUNNER_TEMP/harness/benchmarks/Oxbow.LoadTests"
+python3 - "$harness_dir/run.py" <<'PYTHON'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+before = '"-e", "OXBOW_LOAD_DB='
+assert source.count(before) == 1 and source.count("Maximum Pool Size=64;Timeout=3") == 1
+source = source.replace(before, '"-e", f"OXBOW_LOAD_DB=')
+source = source.replace("Maximum Pool Size=64;Timeout=3", "Maximum Pool Size={12 if role == 'produce' else 64};Timeout=3")
+path.write_text(source)
+PYTHON
+git -C "$RUNNER_TEMP/harness" diff -- benchmarks/Oxbow.LoadTests/run.py > evidence/producer-pool.patch
 vmstat -w -t 5 > evidence/host.txt &
 host_pid=$!
 sample_pg() {
