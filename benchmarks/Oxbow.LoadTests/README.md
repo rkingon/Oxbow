@@ -168,13 +168,29 @@ All 361 host samples showed AC power. Median host CPU idle was 78%, with a minim
 
 The earlier interrupted attempt reconciled 144,000 offers over two minutes. The table uses only the fresh, uninterrupted run for the third result. Recovery, fairness, concurrency, burst and capacity profiles on this package remain pending.
 
+### Producer warm-up comparison
+
+The 30-minute control used harness `35aa180` with `--warm-producer`. It used the same Oxbow package and dependency DLLs, 1,200 offers/s, 512 in-flight limit, and gates as cold run 3. All 30 producers opened eight pooled connections before starting their clocks. Warm-up took 37–253 ms (median 46.5 ms).
+
+| Across 2,160,000 offers per run | Cold run 3 | Warm control |
+|---|---:|---:|
+| Skips in the first scheduled second of a cohort | 454 | 328 |
+| Skips later in a cohort | 0 | 856 |
+| Acknowledged and completed on first attempt | 2,159,546 | 2,158,816 |
+| Median time from first scheduled single insert to acknowledgment, across ten producer starts | 186 ms | 87 ms |
+| Highest one-minute p99 queue wait | 171.3 ms | 318.0 ms |
+
+Admission failed in both runs. In the warm control, all 1,184 skips were single inserts. Minute 24 accounted for all 328 first-second skips. The other 856 occurred in seconds 52–59 of minutes 6 and 21. All 30 cohorts drained within 30 seconds, every skipped ID was absent, and there were zero uncertain submissions or retries. The final storage sample measured 132.33 MiB for the table and 92.69 MiB for its indexes.
+
+Both runs stayed on AC power. Median host CPU idle was 78% cold and 73% warm. Near the warm run's missed offers, samples showed 0–4% idle. Competing containers peaked at 907% Docker CPU (about nine cores) during minute 21, versus a 69% peak over the cold run. The first single insert was typically acknowledged sooner with prewarming, but prewarming alone did not prevent startup skips. The different host loads limit what this pair establishes about the cause. Raw data is in `artifacts/load-tests/merged-3364be0/warm-30-20261128T003541Z/`.
+
 ### Run history
 
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
 
 The eight-hour soak at 1,200 offers/s started at 13:45:54 UTC on November 27. The live test database reported schema version 3 and neither of the full JSON GIN indexes was present. The supervisor records table and individual index sizes each minute. The previous build’s last soak was superseded after 7 verified cohorts to prioritize this candidate. Its partial results are retained in `merged-2c79ae9`. Qualification of the two revisions is tracked separately.
 
-The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. For a separate control, add `--warm-producer` to open eight pooled connections before timing each producer. The qualification runs used the default cold start. The effect of prewarming on admission remains unmeasured.
+The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. The qualification runs used the default cold start. The [producer warm-up comparison](#producer-warm-up-comparison) records the separate control.
 
 On the fixed package, the first seven cohorts offered 504,000 jobs and reconciled all 503,577 acknowledgments on the first attempt. The producer skipped 423 single inserts in minute 6, all in scheduled seconds 4 and 5. This differs from the first-second pattern above. Host CPU idle briefly reached 0% in that minute. The missed admission gate stands. All seven cohorts drained within 30 seconds, and the highest cohort p99 queue wait was 241.3 ms.
 
