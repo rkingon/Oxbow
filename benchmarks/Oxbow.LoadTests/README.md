@@ -160,8 +160,13 @@ Each run starts a fresh PostgreSQL instance and schedules 1,200 offers/s on the 
 |---|---:|---:|---:|---:|---:|---|
 | 1 | 2,160,000 | 2,137,279 | 22,721 | 0 | 898.6 ms | Admission failed in nine minutes. All 30 cohorts met the drain and queue-wait limits. |
 | 2 | 2,160,000 | 2,123,303 | 36,697 | 0 | 1,467.8 ms | Admission failed in seven minutes and queue wait failed in four. All 30 cohorts drained on time. |
+| 3 (fresh run) | 2,160,000 | 2,159,546 | 454 | 0 | 171.3 ms | Admission failed in one minute. All 30 cohorts met the drain and queue-wait limits. |
 
-Qualification paused for a quieter host two full minutes into run 3. All 144,000 offers in those two minutes completed on their first attempt. The partial run has no 30-minute verdict. Recovery, fairness, concurrency, burst and capacity profiles on this package remain pending.
+In the fresh third run, all 454 skips fell in the first scheduled second of minute 18, when a new producer began issuing single inserts. The producer reached its in-flight cap before dispatch. This matches the previously observed cold-start pattern. Reconciliation by ID confirmed that every acknowledged job completed on its first attempt and every skipped ID was absent. The worst queue-wait p99 was 171.3 ms in minute 26 (COPY).
+
+All 361 host samples showed AC power. Median host CPU idle was 78%, with a minimum of 0%. Competing containers peaked at 69.34% Docker CPU across the run and used 0.18% in the sample nearest the start of minute 18. From minute 15 to the final sample, the job table went from 134.51 to 132.94 MiB and its indexes from 90.64 to 94.27 MiB. The raw receipts and samples are in `artifacts/load-tests/merged-3364be0/steady-3-fresh-20261127T233727Z/`.
+
+The earlier interrupted attempt reconciled 144,000 offers over two minutes. The table uses only the fresh, uninterrupted run for the third result. Recovery, fairness, concurrency, burst and capacity profiles on this package remain pending.
 
 ### Run history
 
