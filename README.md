@@ -3,7 +3,8 @@
 A durable, Postgres-backed job queue for .NET, modeled on [River](https://riverqueue.com). Its reason to exist:
 **insert jobs in your own transaction**, so a job commits or rolls back with the data it belongs to.
 
-> **Alpha.** The API may change before 1.0. See [CHANGELOG.md](CHANGELOG.md).
+> **1.0 release candidate.** For changes since `0.2.0-alpha.5` and known load-test limits, see the
+> [RC1 release notes](https://github.com/rkingon/Oxbow/blob/main/CHANGELOG.md#100-rc1).
 
 - Transactional enqueue on your `NpgsqlConnection`/`NpgsqlTransaction`
 - Typed jobs and DI-resolved workers, args serialized with System.Text.Json

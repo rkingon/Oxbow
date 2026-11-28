@@ -5,11 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-rc.1]
+
+First release candidate for Oxbow 1.0. Applications on `0.2.0-alpha.5` can upgrade directly.
+The public API and database schema are unchanged. For earlier versions, apply the
+[migrations and runtime grants](docs/migrations.md) through schema version 3 before deploying.
+
 ### Fixed
 
 - A queue paused while a node's listener wasn't connected (as the node started, or while it reconnected) no longer
   keeps starting jobs on that node for up to 30 seconds. Nodes now read the pause only once they're listening, re-read
   it on every reconnect, and a pause notification is no longer overwritten by a database read that started before it.
+
+### Load qualification
+
+The latest eight-hour soak tested revision `3364be0`, which predates steps, attempt locks and the queue-pause fix.
+At 1,200 offers/s with 12 producer connections, all 34,444,619 acknowledged jobs completed on their first attempt
+and all 480 cohorts drained within 30 seconds. The producer skipped 115,381 offers before dispatch, and one
+cohort reached 1.233 seconds p99 queue wait. Qualification at this rate remains open.
+See the [per-minute results and run conditions](benchmarks/Oxbow.LoadTests/README.md#overnight-mac-soak-with-12-producer-connections).
 
 ## [0.2.0-alpha.5] - 2026-11-27
 
