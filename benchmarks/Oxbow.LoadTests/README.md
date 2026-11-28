@@ -25,7 +25,7 @@ python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 480
 python3 benchmarks/Oxbow.LoadTests/run.py capacity --seconds 300
 ```
 
-To test a merged candidate as a NuGet consumer, pack a clean product checkout into a local feed. From the harness checkout, publish with the same version and the absolute feed path, then run the profiles above.
+To test a merged candidate as a NuGet consumer, pack a clean product checkout into a local feed. From the harness checkout, publish with the same version and the absolute feed path, then run the profiles above. Start with an empty publish directory when switching between project references and packages: an incremental publish can retain stale DLLs.
 
 ```sh
 # In the product checkout
@@ -49,7 +49,7 @@ Each invocation creates a private Docker network, a Postgres container with its 
 | Hot key | Put 100,000 jobs ahead of an independent partition on two nodes. Measure both partitions separately. Check peak overlapping worker executions against a global cap of 64. Repeat on a queue with a per-key rate of 500/s and burst of 64, checking the rate envelope against database claim timestamps. The independent partition must stay below one second p99 in both runs. |
 | Soak | On two nodes, rotate bulk, COPY, and single inserts in one-minute cohorts. Reconcile every cohort before its five-minute completed-job retention expires. Record memory, CPU, queue size, table size, dead tuples, and autovacuums. Each cohort must have p99 claim wait below one second and zero unexpected retries. |
 
-The controller verifies that Postgres has `fsync` and `synchronous_commit` enabled. Each process has a 64-connection pool. Fetch cooldown is the default 100 ms. For repeatable fault injection, job timeout is 10 s and rescue eligibility is 12 s. Election and maintenance use their normal cadences.
+The controller verifies that Postgres has `fsync` and `synchronous_commit` enabled. Each process defaults to a 64-connection pool. Set `--producer-pool-size` to change the producer's connection limit. Fetch cooldown is the default 100 ms. For repeatable fault injection, job timeout is 10 s and rescue eligibility is 12 s. Election and maintenance use their normal cadences.
 
 Positive sequence numbers form the offered manifest for the fresh database. Producer receipts identify acknowledged and uncertain ranges. For every committed range the controller checks the distinct sequence count, final state, and worker output. This also works with COPY, which returns a count. The crash probe writes an independent side effect so a repeated execution remains visible after recovery.
 
@@ -194,6 +194,22 @@ Admission was the only failed gate. Of 2,160,000 offers, 2,152,850 were acknowle
 
 - **Startup:** All ten single-insert cohorts skipped offers in their first scheduled second, 817 in total. For the first scheduled insert, median time to acknowledgment across those ten starts was 458 ms. At 1,200/s the producer schedules 512 calls in about 427 ms.
 - **During traffic:** The other 6,333 skips occurred 44–59 seconds into minute 12. In its final eight seconds, acknowledged insert calls took up to 1,544 ms while the largest delay before dispatch was 16 ms. A five-second host sample showed 66 runnable tasks and 0% CPU idle. PostgreSQL samples in the same window showed active backends waiting on WAL writes and shared buffers. These observations locate the delay inside outstanding calls and show that jobs from other projects on the Mac were unnecessary to reproduce it. They leave the relative contributions of the client pool, PostgreSQL and the runner's storage unresolved.
+
+Reducing only the producer connection pool from 64 to 12 passed all gates in the first 30-minute comparison. The worker pools stayed at 64, the producer still had a 512-call limit, and all producers started cold. The two hosted runs had identical published DLL hashes. [12-connection run, attempt 1](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/1)
+
+| At 1,200 offers/s on four vCPUs | 64 connections | 12 connections |
+|---|---:|---:|
+| Skipped in the first scheduled second | 817 | 0 |
+| Skipped later | 6,333 | 0 |
+| Acknowledged and completed on first attempt | 2,152,850 | 2,160,000 |
+| Median acknowledgment time for the first scheduled single insert | 458 ms | 379 ms |
+| Worst one-minute insert-call / queue-wait p99 | 1,150.6 / 792.8 ms | 283.4 / 143.8 ms |
+
+All 30 cohorts drained within 30 seconds in both runs, with zero uncertain submissions or retries. Median host CPU idle was 91% in both. With 12 connections, peak sampled runnable tasks fell from 66 to 19 and the peak number of active database sessions waiting on the WAL write lock fell from 58 to 13. To repeat this configuration after publishing the package-backed harness:
+
+```sh
+python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 30 --producer-pool-size 12
+```
 
 ### Run history
 
