@@ -213,7 +213,24 @@ python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 30 --produc
 
 ### Overnight Mac soak with 12 producer connections
 
-Through minute 63, the producer scheduled 4,536,000 offers at 1,200/s. All 4,491,622 acknowledged IDs completed on the first attempt. Every cohort drained within 30 seconds. In 12 single-insert cohorts the producer skipped 44,378 offers, including 42,351 after the first scheduled second. Minute 58 (bulk inserts) missed the one-second queue-wait gate at 1,233.2 ms p99. Each of the 13 affected minutes had at least one host sample at 0% CPU idle. Across this interval median CPU idle was 6%, power stayed on AC, and indexes occupied 92.6 MiB at the latest sample. The full eight-hour run continues in `artifacts/load-tests/merged-3364be0/overnight-pool12-20261128T031754Z/`.
+**The 12-connection soak finished all 480 minutes. Correctness and drain passed. Admission and queue latency failed.** The Mac offered 1,200 jobs/s for eight hours using dev package `1.0.0-dev.g3364be0`, cold harness `62fc69f` and the hosted producer-pool patch. The worker pools stayed at 64 connections. The controller exited with code 1 after the final cohort because both failed gates count for the whole run. [Per-minute results](results/3364be0-pool12-soak.csv)
+
+| Eight-hour Mac run | Daytime, 64 producer connections | Overnight, 12 producer connections |
+|---|---:|---:|
+| Scheduled offers | 34,560,000 | 34,560,000 |
+| Acknowledged and completed on first attempt | 33,975,981 | 34,444,619 |
+| Skipped before dispatch | 564,922 | 115,381 |
+| Uncertain submissions, confirmed absent | 19,097 | 0 |
+| Cohorts drained within 30 seconds | 480/480 | 480/480 |
+| Cohorts missing the one-second queue-wait p99 gate | 65 | 1 |
+| Worst one-minute queue-wait p99 | 29.630 s | 1.233 s |
+| Final index size | 117.06 MiB | 100.29 MiB |
+
+The overnight receipts covered every scheduled ID. The producer skipped 4,702 offers in the first scheduled second of a cohort and 110,679 later. All skips were in 46 single-insert cohorts. The only latency miss was minute 58, a bulk-insert cohort. The final 153 consecutive minutes met every gate, with a worst one-minute p99 of 104.6 ms.
+
+Power stayed on AC throughout. Of 115,381 skips, 115,169 fell in minutes with at least one host sample at or below 10% idle. The host experienced different competing loads across the two runs, so the comparison cannot isolate the effect of pool size. Index storage stayed between 100.25 and 100.29 MiB over the final four hours. The last sample measured 134.84 MiB for the table, and the two workers used approximately 85 and 80 MiB at both hours four and eight. The raw evidence is in `artifacts/load-tests/merged-3364be0/overnight-pool12-20261128T031754Z/`.
+
+On separate four-vCPU runners, the two 30-minute controls with 12 producer connections recorded zero and 95 skipped offers. In the second run all 95 skips occurred in the first scheduled second of single-insert cohorts. Its 2,159,905 acknowledged jobs completed on their first attempt, all cohorts drained on time, and queue-wait p99 peaked at 134.9 ms. Twelve connections reduced observed misses in these tests, but did not consistently satisfy zero-skip admission. [First hosted run](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/1) · [Hosted repeat](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/2)
 
 ### Run history
 
