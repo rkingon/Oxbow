@@ -211,6 +211,10 @@ All 30 cohorts drained within 30 seconds in both runs, with zero uncertain submi
 python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 30 --producer-pool-size 12
 ```
 
+### Overnight Mac soak with 12 producer connections
+
+Through minute 63, the producer scheduled 4,536,000 offers at 1,200/s. All 4,491,622 acknowledged IDs completed on the first attempt. Every cohort drained within 30 seconds. In 12 single-insert cohorts the producer skipped 44,378 offers, including 42,351 after the first scheduled second. Minute 58 (bulk inserts) missed the one-second queue-wait gate at 1,233.2 ms p99. Each of the 13 affected minutes had at least one host sample at 0% CPU idle. Across this interval median CPU idle was 6%, power stayed on AC, and indexes occupied 92.6 MiB at the latest sample. The full eight-hour run continues in `artifacts/load-tests/merged-3364be0/overnight-pool12-20261128T031754Z/`.
+
 ### Run history
 
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
