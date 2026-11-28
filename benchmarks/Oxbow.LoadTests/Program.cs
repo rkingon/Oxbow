@@ -121,7 +121,8 @@ internal static class Traffic
     public static async Task WarmAsync(NpgsqlDataSource db)
     {
         var started = Stopwatch.GetTimestamp();
-        var opens = Enumerable.Range(0, 8).Select(_ => db.OpenConnectionAsync().AsTask()).ToArray();
+        var poolSize = new NpgsqlConnectionStringBuilder(db.ConnectionString).MaxPoolSize;
+        var opens = Enumerable.Range(0, Math.Min(8, poolSize)).Select(_ => db.OpenConnectionAsync().AsTask()).ToArray();
         try
         {
             await Task.WhenAll(opens);

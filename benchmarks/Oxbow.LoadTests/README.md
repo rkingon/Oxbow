@@ -25,7 +25,7 @@ python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 480
 python3 benchmarks/Oxbow.LoadTests/run.py capacity --seconds 300
 ```
 
-To test a merged candidate as a NuGet consumer, pack a clean product checkout into a local feed. From the harness checkout, publish with the same version and the absolute feed path, then run the profiles above.
+To test a merged candidate as a NuGet consumer, pack a clean product checkout into a local feed. From the harness checkout, publish with the same version and the absolute feed path, then run the profiles above. Start with an empty publish directory when switching between project references and packages: an incremental publish can retain stale DLLs.
 
 ```sh
 # In the product checkout
@@ -49,7 +49,7 @@ Each invocation creates a private Docker network, a Postgres container with its 
 | Hot key | Put 100,000 jobs ahead of an independent partition on two nodes. Measure both partitions separately. Check peak overlapping worker executions against a global cap of 64. Repeat on a queue with a per-key rate of 500/s and burst of 64, checking the rate envelope against database claim timestamps. The independent partition must stay below one second p99 in both runs. |
 | Soak | On two nodes, rotate bulk, COPY, and single inserts in one-minute cohorts. Reconcile every cohort before its five-minute completed-job retention expires. Record memory, CPU, queue size, table size, dead tuples, and autovacuums. Each cohort must have p99 claim wait below one second and zero unexpected retries. |
 
-The controller verifies that Postgres has `fsync` and `synchronous_commit` enabled. Each process has a 64-connection pool. Fetch cooldown is the default 100 ms. For repeatable fault injection, job timeout is 10 s and rescue eligibility is 12 s. Election and maintenance use their normal cadences.
+The controller verifies that Postgres has `fsync` and `synchronous_commit` enabled. Each process defaults to a 64-connection pool. Set `--producer-pool-size` to change the producer's connection limit. Fetch cooldown is the default 100 ms. For repeatable fault injection, job timeout is 10 s and rescue eligibility is 12 s. Election and maintenance use their normal cadences.
 
 Positive sequence numbers form the offered manifest for the fresh database. Producer receipts identify acknowledged and uncertain ranges. For every committed range the controller checks the distinct sequence count, final state, and worker output. This also works with COPY, which returns a count. The crash probe writes an independent side effect so a repeated execution remains visible after recovery.
 
@@ -150,11 +150,95 @@ The [per-minute soak results](results/3364be0-soak.csv) contain reconciled count
 
 At the final sample the job table occupied 131.08 MiB and indexes occupied 117.06 MiB. At matched volume near 9.1 million completions, table and indexes together occupied 249 MiB on this build and 1,517 MiB on `2c79ae9`. Across the full soak, all 65 latency misses and 564,104 of 564,922 skips occurred in minutes with at least one host CPU sample at or below 10% idle. The 248 other minutes had zero latency misses and 818 skips. All failures count toward qualification on this shared host.
 
+A separate CI investigation reproduced a worker starting jobs on a paused queue during listener startup or reconnect. The regression failed on the prior code and passed on PostgreSQL 16 and 17 with the fix. [PR #20](https://github.com/rkingon/Oxbow/pull/20) merged as `c29cff8`; [merged-main CI](https://github.com/rkingon/Oxbow/actions/runs/46077456117) passed. The load profiles reported here use `3364be0` and predate this fix.
+
+### Standalone 30-minute runs
+
+Each run starts a fresh PostgreSQL instance and schedules 1,200 offers/s on the same dev package and harness as the eight-hour soak.
+
+| Run | Offered | Acknowledged and completed on first attempt | Producer skips | Uncertain IDs | Highest one-minute p99 wait | Verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | 2,160,000 | 2,137,279 | 22,721 | 0 | 898.6 ms | Admission failed in nine minutes. All 30 cohorts met the drain and queue-wait limits. |
+| 2 | 2,160,000 | 2,123,303 | 36,697 | 0 | 1,467.8 ms | Admission failed in seven minutes and queue wait failed in four. All 30 cohorts drained on time. |
+| 3 (fresh run) | 2,160,000 | 2,159,546 | 454 | 0 | 171.3 ms | Admission failed in one minute. All 30 cohorts met the drain and queue-wait limits. |
+
+In the fresh third run, all 454 skips fell in the first scheduled second of minute 18, when a new producer began issuing single inserts. The producer reached its in-flight cap before dispatch. This matches the previously observed cold-start pattern. Reconciliation by ID confirmed that every acknowledged job completed on its first attempt and every skipped ID was absent. The worst queue-wait p99 was 171.3 ms in minute 26 (COPY).
+
+All 361 host samples showed AC power. Median host CPU idle was 78%, with a minimum of 0%. Competing containers peaked at 69.34% Docker CPU across the run and used 0.18% in the sample nearest the start of minute 18. From minute 15 to the final sample, the job table went from 134.51 to 132.94 MiB and its indexes from 90.64 to 94.27 MiB. The raw receipts and samples are in `artifacts/load-tests/merged-3364be0/steady-3-fresh-20261127T233727Z/`.
+
+The earlier interrupted attempt reconciled 144,000 offers over two minutes. The table uses only the fresh, uninterrupted run for the third result. Recovery, fairness, concurrency, burst and capacity profiles on this package remain pending.
+
+### Producer warm-up comparison
+
+The 30-minute control used harness `35aa180` with `--warm-producer`. It used the same Oxbow package and dependency DLLs, 1,200 offers/s, 512 in-flight limit, and gates as cold run 3. All 30 producers opened eight pooled connections before starting their clocks. Warm-up took 37–253 ms (median 46.5 ms).
+
+| Across 2,160,000 offers per run | Cold run 3 | Warm control |
+|---|---:|---:|
+| Skips in the first scheduled second of a cohort | 454 | 328 |
+| Skips later in a cohort | 0 | 856 |
+| Acknowledged and completed on first attempt | 2,159,546 | 2,158,816 |
+| Median time from first scheduled single insert to acknowledgment, across ten producer starts | 186 ms | 87 ms |
+| Highest one-minute p99 queue wait | 171.3 ms | 318.0 ms |
+
+Admission failed in both runs. In the warm control, all 1,184 skips were single inserts. Minute 24 accounted for all 328 first-second skips. The other 856 occurred in seconds 52–59 of minutes 6 and 21. All 30 cohorts drained within 30 seconds, every skipped ID was absent, and there were zero uncertain submissions or retries. The final storage sample measured 132.33 MiB for the table and 92.69 MiB for its indexes.
+
+Both runs stayed on AC power. Median host CPU idle was 78% cold and 73% warm. Near the warm run's missed offers, samples showed 0–4% idle. Competing containers peaked at 907% Docker CPU (about nine cores) during minute 21, versus a 69% peak over the cold run. The first single insert was typically acknowledged sooner with prewarming, but prewarming alone did not prevent startup skips. The different host loads limit what this pair establishes about the cause. Raw data is in `artifacts/load-tests/merged-3364be0/warm-30-20261128T003541Z/`.
+
+The receipts also distinguish time spent waiting to dispatch from time spent inside an insert. For each acknowledged single insert, its scheduled time plus `offeredToAckMs` gives the acknowledgment time on the producer clock. Subtracting `insertMs` gives the call start. Counting overlapping intervals at the start of the last call before each continuous group of skipped IDs showed 512 calls in progress before the cold run's skip and 507–512 before the warm run's skips. During second 57 of warm minute 21, two calls bracketing a group of skipped IDs took 671 ms and 599 ms. The producer reached its cap while earlier inserts were still outstanding. These timings include connection-pool waits and do not identify which part of the insert path caused the delay.
+
+### Admission on a dedicated runner
+
+A fresh four-vCPU ARM Linux runner ran the original cold harness at `62fc69f` for 30 minutes at 1,200 offers/s. The runner rebuilt dev package `1.0.0-dev.g3364be0` from the same source revision and verified both Oxbow DLLs against its local packages. Those build hashes differed from the Mac build. Both used PostgreSQL 17.12 and .NET 10.0.15. [Run and evidence](https://github.com/rkingon/Oxbow/actions/runs/46092268315)
+
+Admission was the only failed gate. Of 2,160,000 offers, 2,152,850 were acknowledged, reconciled by ID and completed on the first attempt. The remaining 7,150 were skipped before dispatch and confirmed absent. All 30 cohorts drained within 30 seconds. The highest one-minute queue-wait p99 was 792.8 ms.
+
+- **Startup:** All ten single-insert cohorts skipped offers in their first scheduled second, 817 in total. For the first scheduled insert, median time to acknowledgment across those ten starts was 458 ms. At 1,200/s the producer schedules 512 calls in about 427 ms.
+- **During traffic:** The other 6,333 skips occurred 44–59 seconds into minute 12. In its final eight seconds, acknowledged insert calls took up to 1,544 ms while the largest delay before dispatch was 16 ms. A five-second host sample showed 66 runnable tasks and 0% CPU idle. PostgreSQL samples in the same window showed active backends waiting on WAL writes and shared buffers. These observations locate the delay inside outstanding calls and show that jobs from other projects on the Mac were unnecessary to reproduce it. They leave the relative contributions of the client pool, PostgreSQL and the runner's storage unresolved.
+
+Reducing only the producer connection pool from 64 to 12 passed all gates in the first 30-minute comparison. The worker pools stayed at 64, the producer still had a 512-call limit, and all producers started cold. The two hosted runs had identical published DLL hashes. [12-connection run, attempt 1](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/1)
+
+| At 1,200 offers/s on four vCPUs | 64 connections | 12 connections |
+|---|---:|---:|
+| Skipped in the first scheduled second | 817 | 0 |
+| Skipped later | 6,333 | 0 |
+| Acknowledged and completed on first attempt | 2,152,850 | 2,160,000 |
+| Median acknowledgment time for the first scheduled single insert | 458 ms | 379 ms |
+| Worst one-minute insert-call / queue-wait p99 | 1,150.6 / 792.8 ms | 283.4 / 143.8 ms |
+
+All 30 cohorts drained within 30 seconds in both runs, with zero uncertain submissions or retries. Median host CPU idle was 91% in both. With 12 connections, peak sampled runnable tasks fell from 66 to 19 and the peak number of active database sessions waiting on the WAL write lock fell from 58 to 13. To repeat this configuration after publishing the package-backed harness:
+
+```sh
+python3 benchmarks/Oxbow.LoadTests/run.py soak --rate 1200 --minutes 30 --producer-pool-size 12
+```
+
+### Overnight Mac soak with 12 producer connections
+
+**The 12-connection soak finished all 480 minutes. Correctness and drain passed. Admission and queue latency failed.** The Mac offered 1,200 jobs/s for eight hours using dev package `1.0.0-dev.g3364be0`, cold harness `62fc69f` and the hosted producer-pool patch. The worker pools stayed at 64 connections. The controller exited with code 1 after the final cohort because both failed gates count for the whole run. [Per-minute results](results/3364be0-pool12-soak.csv)
+
+| Eight-hour Mac run | Daytime, 64 producer connections | Overnight, 12 producer connections |
+|---|---:|---:|
+| Scheduled offers | 34,560,000 | 34,560,000 |
+| Acknowledged and completed on first attempt | 33,975,981 | 34,444,619 |
+| Skipped before dispatch | 564,922 | 115,381 |
+| Uncertain submissions, confirmed absent | 19,097 | 0 |
+| Cohorts drained within 30 seconds | 480/480 | 480/480 |
+| Cohorts missing the one-second queue-wait p99 gate | 65 | 1 |
+| Worst one-minute queue-wait p99 | 29.630 s | 1.233 s |
+| Final index size | 117.06 MiB | 100.29 MiB |
+
+The overnight receipts covered every scheduled ID. The producer skipped 4,702 offers in the first scheduled second of a cohort and 110,679 later. All skips were in 46 single-insert cohorts. The only latency miss was minute 58, a bulk-insert cohort. The final 153 consecutive minutes met every gate, with a worst one-minute p99 of 104.6 ms.
+
+Power stayed on AC throughout. Of 115,381 skips, 115,169 fell in minutes with at least one host sample at or below 10% idle. The host experienced different competing loads across the two runs, so the comparison cannot isolate the effect of pool size. Index storage stayed between 100.25 and 100.29 MiB over the final four hours. The last sample measured 134.84 MiB for the table, and the two workers used approximately 85 and 80 MiB at both hours four and eight. The raw evidence is in `artifacts/load-tests/merged-3364be0/overnight-pool12-20261128T031754Z/`.
+
+On separate four-vCPU runners, the two 30-minute controls with 12 producer connections recorded zero and 95 skipped offers. In the second run all 95 skips occurred in the first scheduled second of single-insert cohorts. Its 2,159,905 acknowledged jobs completed on their first attempt, all cohorts drained on time, and queue-wait p99 peaked at 134.9 ms. Twelve connections reduced observed misses in these tests, but did not consistently satisfy zero-skip admission. [First hosted run](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/1) · [Hosted repeat](https://github.com/rkingon/Oxbow/actions/runs/46095161550/attempts/2)
+
+### Run history
+
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
 
 The eight-hour soak at 1,200 offers/s started at 13:45:54 UTC on November 27. The live test database reported schema version 3 and neither of the full JSON GIN indexes was present. The supervisor records table and individual index sizes each minute. The previous build’s last soak was superseded after 7 verified cohorts to prioritize this candidate. Its partial results are retained in `merged-2c79ae9`. Qualification of the two revisions is tracked separately.
 
-The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. For a separate control, add `--warm-producer` to open eight pooled connections before timing each producer. The qualification runs used the default cold start. The effect of prewarming on admission remains unmeasured.
+The capacity investigator matched 314 earlier one-minute cohorts to host samples. Of 105 failed cohorts, 97% had at least one host sample at or below 10% idle. One of 113 cohorts classified as calm failed admission: all 56 missed single inserts fell in its first scheduled second. The qualification runs used the default cold start. The [producer warm-up comparison](#producer-warm-up-comparison) records the separate control.
 
 On the fixed package, the first seven cohorts offered 504,000 jobs and reconciled all 503,577 acknowledgments on the first attempt. The producer skipped 423 single inserts in minute 6, all in scheduled seconds 4 and 5. This differs from the first-second pattern above. Host CPU idle briefly reached 0% in that minute. The missed admission gate stands. All seven cohorts drained within 30 seconds, and the highest cohort p99 queue wait was 241.3 ms.
 

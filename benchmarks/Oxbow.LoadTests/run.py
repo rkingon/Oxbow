@@ -80,7 +80,7 @@ class Run:
         settings = self.sql("select version(), current_setting('fsync'), current_setting('synchronous_commit')")
         require(settings.endswith("|on|on"), settings)
         self.report("environment", postgres=settings, runtime=command("docker", "run", "--rm", DOTNET, "dotnet", "--list-runtimes"),
-                    warmProducer=self.options.warm_producer,
+                    warmProducer=self.options.warm_producer, producerPoolSize=self.options.producer_pool_size,
                     commit=command("git", "-C", str(HERE), "rev-parse", "HEAD"), artifacts=str(self.folder),
                     docker=command("docker", "info", "--format", "{{.NCPU}} CPU / {{.MemTotal}} bytes"))
 
@@ -91,9 +91,10 @@ class Run:
     def app(self, role, *args, background=False):
         ident = self.name + "-" + role + "-" + str(len(self.containers))
         self.containers.append(ident)
+        pool_size = self.options.producer_pool_size if role == "produce" else 64
         cmd = ["docker", "run", "--ulimit", "core=0:0", "--name", ident, "--network", self.name,
                "-v", str(HERE / "bin/Release/publish") + ":/app:ro",
-               "-e", "OXBOW_LOAD_DB=Host=db;Username=postgres;Password=loadtest;Database=postgres;Maximum Pool Size=64;Timeout=3",
+               "-e", f"OXBOW_LOAD_DB=Host=db;Username=postgres;Password=loadtest;Database=postgres;Maximum Pool Size={pool_size};Timeout=3",
                DOTNET, "dotnet", DLL, role, *map(str, args)]
         if role == "produce" and self.options.warm_producer:
             cmd[2:2] = ["-e", "OXBOW_LOAD_WARM_PRODUCER=1"]
@@ -444,8 +445,11 @@ def main():
     parser.add_argument("--hot-queues", nargs="+", choices=["hot", "rate"], default=["hot", "rate"])
     parser.add_argument("--minutes", default=480, type=int, help="Soak duration")
     parser.add_argument("--rate", default=1000, type=int, help="Soak target in jobs/second")
-    parser.add_argument("--warm-producer", action="store_true", help="Open eight pooled connections before each producer starts its clock")
+    parser.add_argument("--warm-producer", action="store_true", help="Open up to eight pooled connections before each producer starts its clock")
+    parser.add_argument("--producer-pool-size", type=int, default=64, help="Maximum database connections per producer (default 64)")
     options = parser.parse_args()
+    if options.producer_pool_size < 1:
+        parser.error("--producer-pool-size must be positive")
     require(min(options.seconds, options.minutes, options.rate, options.hot_jobs, options.burst_seconds) > 0, "Step duration must be positive")
     run = Run(options)
     print("Artifacts:", run.folder, flush=True)
