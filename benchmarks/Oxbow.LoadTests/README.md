@@ -186,6 +186,15 @@ Both runs stayed on AC power. Median host CPU idle was 78% cold and 73% warm. Ne
 
 The receipts also distinguish time spent waiting to dispatch from time spent inside an insert. For each acknowledged single insert, its scheduled time plus `offeredToAckMs` gives the acknowledgment time on the producer clock. Subtracting `insertMs` gives the call start. Counting overlapping intervals at the start of the last call before each continuous group of skipped IDs showed 512 calls in progress before the cold run's skip and 507–512 before the warm run's skips. During second 57 of warm minute 21, two calls bracketing a group of skipped IDs took 671 ms and 599 ms. The producer reached its cap while earlier inserts were still outstanding. These timings include connection-pool waits and do not identify which part of the insert path caused the delay.
 
+### Admission on a dedicated runner
+
+A fresh four-vCPU ARM Linux runner ran the original cold harness at `62fc69f` for 30 minutes at 1,200 offers/s. The runner rebuilt dev package `1.0.0-dev.g3364be0` from the same source revision and verified both Oxbow DLLs against its local packages. Those build hashes differed from the Mac build. Both used PostgreSQL 17.12 and .NET 10.0.15. [Run and evidence](https://github.com/rkingon/Oxbow/actions/runs/46092268315)
+
+Admission was the only failed gate. Of 2,160,000 offers, 2,152,850 were acknowledged, reconciled by ID and completed on the first attempt. The remaining 7,150 were skipped before dispatch and confirmed absent. All 30 cohorts drained within 30 seconds. The highest one-minute queue-wait p99 was 792.8 ms.
+
+- **Startup:** All ten single-insert cohorts skipped offers in their first scheduled second, 817 in total. For the first scheduled insert, median time to acknowledgment across those ten starts was 458 ms. At 1,200/s the producer schedules 512 calls in about 427 ms.
+- **During traffic:** The other 6,333 skips occurred 44–59 seconds into minute 12. In its final eight seconds, acknowledged insert calls took up to 1,544 ms while the largest delay before dispatch was 16 ms. A five-second host sample showed 66 runnable tasks and 0% CPU idle. PostgreSQL samples in the same window showed active backends waiting on WAL writes and shared buffers. These observations locate the delay inside outstanding calls and show that jobs from other projects on the Mac were unnecessary to reproduce it. They leave the relative contributions of the client pool, PostgreSQL and the runner's storage unresolved.
+
 ### Run history
 
 PR #16 merged as `3364be058cc81f7c1e3b9fc100038c482757dcac`. CI passed on the merged revision. Six local packages and their symbols are in `artifacts/load-tests/merged-3364be0/feed` at version `1.0.0-dev.g3364be0`. The harness at `62fc69fd8b70763e8cc297127a41a20061eefef5` resolved Oxbow and Oxbow.Abstractions at that exact version and both published DLLs matched their package archives byte for byte.
